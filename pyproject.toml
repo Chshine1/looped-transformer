@@ -1,0 +1,43 @@
+[project]
+authors = [{ name = "Chshine1", email = "chshine@qq.com" }]
+dependencies = ["torch"]
+name = "looped-transformer"
+requires-python = ">= 3.12"
+version = "0.1.0"
+
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling"]
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["win-64"]
+
+[tool.pixi.system-requirements]
+cuda = "12.6"
+
+[tool.pixi.pypi-options.dependency-overrides]
+torch = { version = "*", index = "https://download.pytorch.org/whl/cu126" }
+
+[tool.pixi.pypi-dependencies]
+looped_transformer = { path = ".", editable = true }
+
+[tool.pixi.dependencies]
+python = ">=3.12,<3.14"
+pixi-pycharm = ">=0.0.12,<0.0.13"
+ruff = ">=0.16.10,<0.17"
+
+[tool.ruff]
+target-version = "py313"
+src = ["src"]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "RUF", "SIM", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pixi.tasks]
+format = "python -m ruff format ."
