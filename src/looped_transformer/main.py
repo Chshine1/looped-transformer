@@ -32,7 +32,7 @@ class MNLIRunner:
 
     def evaluate(
         self, premise_texts: list[str], hypothesis_texts: list[str]
-    ) -> tuple[LogicRelation]:
+    ) -> tuple[LogicRelation, ...]:
         encoding = self._tokenizer(
             text=premise_texts,
             text_pair=hypothesis_texts,

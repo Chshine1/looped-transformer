@@ -93,7 +93,7 @@ class LoopedMNLI(nn.Module):
         halting_hidden_state = torch.zeros(
             batch_size, seq_length, dimension, device=input_ids.device
         )
-        halting_times = (self._max_iter - 1) * torch.ones(
+        halting_times = (self._model_options.max_iterations - 1) * torch.ones(
             batch_size, device=input_ids.device, dtype=torch.long
         )
         batches_halted = torch.zeros(batch_size, device=input_ids.device).bool()
@@ -133,7 +133,7 @@ class LoopedMNLI(nn.Module):
             survivals = survivals_list[-1] * (1 - hazards)
             survivals_list.append(survivals)
 
-            if not self.training:
+            if self.training:
                 continue
 
             halt_batches = (~batches_halted) & (
@@ -141,7 +141,7 @@ class LoopedMNLI(nn.Module):
                 | (survivals < self._model_options.evaluation.halt_survival_threshold)
             )
             batches_halted = batches_halted | halt_batches
-            halting_times = halting_times - (self._max_iter - 1 - t) * halt_batches
+            halting_times = halting_times - (self._model_options.max_iterations - 1 - t) * halt_batches
 
             if torch.all(batches_halted):
                 break
