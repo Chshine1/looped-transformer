@@ -25,7 +25,14 @@ class LoopedMNLI(nn.Module):
         dim = model_options.hidden_state_dimension
         dropout = model_options.training.dropout
         heads_count = model_options.transformer.attention_heads_count
-        ffn_dim = model_options.transformer.ffn_dimension
+        ffn_dim = model_options.transformer.swi_glu_ffn_dimension
+        if (
+            tokenizer_options.vocab_size is None
+            or tokenizer_options.pad_token_id is None
+        ):
+            raise ValueError(
+                "Tokenizer vocabulary metadata must be resolved before model creation"
+            )
 
         self._time_encoding = nn.Embedding(model_options.max_iterations, dim)
 
@@ -84,10 +91,12 @@ class LoopedMNLI(nn.Module):
 
         logits_list: list[Tensor] = []
         hazards_list: list[Tensor] = []
-        survivals_list: list[Tensor] = [torch.ones(batch_size, device=input_ids.device)]
+        survivals_list: list[Tensor] = [
+            torch.ones(batch_size, device=input_ids.device, dtype=h.dtype)
+        ]
 
         halting_hidden_state = torch.zeros(
-            batch_size, seq_length, dimension, device=input_ids.device
+            batch_size, seq_length, dimension, device=input_ids.device, dtype=h.dtype
         )
         halting_times = (self._model_options.max_iterations - 1) * torch.ones(
             batch_size, device=input_ids.device, dtype=torch.long
@@ -113,7 +122,7 @@ class LoopedMNLI(nn.Module):
 
             h = self._loop_normalization(h)
 
-            mask = padding_mask.unsqueeze(-1).float()
+            mask = padding_mask.unsqueeze(-1).to(h.dtype)
             pooled = (h * mask).sum(1) / mask.sum(1).clamp(min=1)
             logits = self._classifier(self._classify_normalization(pooled))
 

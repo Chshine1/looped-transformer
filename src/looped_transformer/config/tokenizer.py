@@ -3,5 +3,6 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class TokenizerOptions:
-    vocab_size: int
-    pad_token_id: int
+    pretrained_model_name: str
+    vocab_size: int | None = None
+    pad_token_id: int | None = None

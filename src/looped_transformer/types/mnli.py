@@ -10,12 +10,12 @@ class LogicRelation(Enum):
 
 def get_logic_relation(label: str) -> LogicRelation:
     label = label.lower().strip()
-
-    if label == "entailment":
-        return LogicRelation.ENTAILMENT
-    elif label == "contradiction":
-        return LogicRelation.CONTRADICTION
-    elif label == "neutral":
-        return LogicRelation.NEUTRAL
-
-    raise ValueError(f"Unknown logic relation: {label}")
+    relations = {
+        "entailment": LogicRelation.ENTAILMENT,
+        "contradiction": LogicRelation.CONTRADICTION,
+        "neutral": LogicRelation.NEUTRAL,
+    }
+    try:
+        return relations[label]
+    except KeyError as error:
+        raise ValueError(f"Unknown logic relation: {label}") from error

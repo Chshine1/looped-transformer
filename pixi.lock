@@ -2625,6 +2625,7 @@ packages:
   name: looped-transformer
   requires_dist:
   - torch
+  - pyyaml>=6.0
   requires_python: '>=3.12'
 - pypi: https://download-r2.pytorch.org/whl/cu126/torch-2.14.1%2Bcu126-cp313-cp313-win_amd64.whl
   name: torch

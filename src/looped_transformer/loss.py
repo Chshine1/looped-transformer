@@ -1,5 +1,5 @@
 import torch
-from torch import nn, Tensor
+from torch import Tensor, nn
 from torch.nn import functional
 
 from looped_transformer.types.model import ModelTrainOutput
@@ -23,18 +23,22 @@ class LoopedMNLILoss(nn.Module):
         output: ModelTrainOutput,
         labels: Tensor,
     ) -> Tensor:
-        logits = output["timed_logits"]
-        probabilities = output["halt_probabilities"]
+        # Keep reductions and logarithms in FP32 even when the forward pass uses AMP.
+        logits = output["timed_logits"].float()
+        probabilities = output["halt_probabilities"].float()
         time = logits.size(0)
 
+        classes = logits.size(-1)
         cross_entropy = functional.cross_entropy(
-            logits, labels.unsqueeze(0).expand(time, -1), reduction="none"
-        )
+            logits.reshape(-1, classes),
+            labels.unsqueeze(0).expand(time, -1).reshape(-1),
+            reduction="none",
+        ).reshape(time, -1)
 
         loss_task = (probabilities * cross_entropy).sum(dim=0).mean()
 
         q = self._get_geometric_distribution(
-            time, 1.0 / self._expected_time, logits.device
+            time, 1.0 / self._expected_time, logits.device, logits.dtype
         )
         loss_halt = (
             (
@@ -51,8 +55,8 @@ class LoopedMNLILoss(nn.Module):
 
     @staticmethod
     def _get_geometric_distribution(
-        time: int, lam: float, device: torch.Device
+        time: int, lam: float, device: torch.device, dtype: torch.dtype
     ) -> Tensor:
-        q = lam * (1 - lam) ** torch.arange(time, device=device)
+        q = lam * (1 - lam) ** torch.arange(time, device=device, dtype=dtype)
         q[-1] = (1 - lam) ** (time - 1)
         return q / q.sum()

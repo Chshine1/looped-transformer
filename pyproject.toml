@@ -1,6 +1,6 @@
 [project]
 authors = [{ name = "Chshine1", email = "chshine@qq.com" }]
-dependencies = ["torch"]
+dependencies = ["torch", "pyyaml>=6.0"]
 name = "looped-transformer"
 requires-python = ">= 3.12"
 version = "0.1.0"
@@ -56,3 +56,4 @@ quote-style = "double"
 [tool.pixi.tasks]
 typecheck = "pyrefly check"
 format = "python -m ruff format ."
+train = "python -m looped_transformer.main --config config.yaml"

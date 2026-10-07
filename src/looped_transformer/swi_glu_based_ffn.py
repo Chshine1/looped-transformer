@@ -1,4 +1,4 @@
-from torch import nn, Tensor
+from torch import Tensor, nn
 from torch.nn import functional
 
 
@@ -8,7 +8,7 @@ class SwiGLUBasedFFN(nn.Module):
         self._dropout = nn.Dropout(dropout)
 
         self._gate_transform = nn.Linear(model_dimension, ffn_dimension, bias=False)
-        self._up_transform   = nn.Linear(model_dimension, ffn_dimension, bias=False)
+        self._up_transform = nn.Linear(model_dimension, ffn_dimension, bias=False)
         self._down_transform = nn.Linear(ffn_dimension, model_dimension, bias=False)
 
     def forward(self, x: Tensor) -> Tensor:

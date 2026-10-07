@@ -1,0 +1,60 @@
+runtime:
+  device: cuda
+  cuda_device_index: 0
+  dtype: float32
+  amp_enabled: true
+  amp_dtype: float16
+  seed: 42
+  allow_tf32: true
+  deterministic: false
+
+data:
+  train_file_path: data/multinli_1.0_train.txt
+  eval_file_path: data/multinli_1.0_dev_matched.txt
+  output_dir: outputs
+  batch_size: 32
+  delimiter: "\t"
+  premise_column: sentence1
+  hypothesis_column: sentence2
+  label_column: gold_label
+  skip_invalid_rows: true
+
+tokenizer:
+  pretrained_model_name: bert-base-uncased
+
+model:
+  hidden_state_dimension: 256
+  output_classes_count: 3
+  max_iterations: 8
+  max_sequence_length: 128
+  transformer:
+    swi_glu_ffn_dimension: 704
+    gelu_ffn_dimension: 1024
+    attention_heads_count: 8
+  training:
+    max_epochs: 5
+    learning_rate: 0.00003
+    weight_decay: 0.01
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_epsilon: 0.00000001
+    max_gradient_norm: 1.0
+    warmup_ratio: 0.1
+    warmup_start_factor: 0.1
+    minimum_learning_rate: 0.000001
+    expected_halting_time: 4
+    halting_loss_scale: 0.05
+    auxiliary_loss_scale: 0.1
+    dropout: 0.1
+    residue_time_scaling: 0.75
+    halt_hazard_baseline_offset: -2.0
+    halt_hazard_baseline_scale: -2.0
+    halt_hazard_adjustment_scale: 0.9
+    gradient_accumulation_steps: 1
+    log_every_steps: 50
+    save_every_epochs: 1
+  evaluation:
+    halt_hazard_threshold: 0.6
+    halt_survival_threshold: 0.05
+    batch_size: 64
+    evaluate_every_epochs: 1

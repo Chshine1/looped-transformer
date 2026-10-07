@@ -1,5 +1,5 @@
 import torch
-from torch import nn, Tensor
+from torch import Tensor, nn
 from torch.nn import functional
 
 from looped_transformer.config.model import ModelOptions
@@ -14,7 +14,7 @@ class HaltingCell(nn.Module):
         dim = model_options.hidden_state_dimension
         dropout = model_options.training.dropout
         heads_count = model_options.transformer.attention_heads_count
-        ffn_dim = model_options.transformer.ffn_dimension
+        mlp_dim = model_options.transformer.gelu_ffn_dimension
 
         self._hazard_adjustment_scale = nn.Parameter(
             torch.tensor(model_options.training.halt_hazard_adjustment_scale)
@@ -33,12 +33,12 @@ class HaltingCell(nn.Module):
 
         self._mlp_normalization = nn.RMSNorm(dim)
 
-        adjustment_mlp_last = nn.Linear(ffn_dim, 1)
+        adjustment_mlp_last = nn.Linear(mlp_dim, 1)
         nn.init.zeros_(adjustment_mlp_last.weight)
         nn.init.constant_(adjustment_mlp_last.bias, -2.0)
 
         self._adjustment_mlp = nn.Sequential(
-            nn.Linear(dim, ffn_dim),
+            nn.Linear(dim, mlp_dim),
             nn.GELU(),
             nn.Dropout(dropout),
             adjustment_mlp_last,
@@ -76,7 +76,7 @@ class HaltingCell(nn.Module):
             + functional.softplus(self._hazard_baseline_scale) * time
             + torch.tanh(out) * self._hazard_adjustment_scale
         )
-        mask = padding_mask.unsqueeze(-1).float()
+        mask = padding_mask.unsqueeze(-1).to(hazards_logit.dtype)
         hazards_logit = (hazards_logit * mask).sum(1) / mask.sum(1).clamp(min=1)
         hazards_logit = hazards_logit.squeeze(-1)
 
