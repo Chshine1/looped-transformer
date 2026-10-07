@@ -9,6 +9,7 @@ from looped_transformer.config.model import ModelOptions
 from looped_transformer.config.tokenizer import TokenizerOptions
 from looped_transformer.halting_cell import HaltingCell, HaltingResult
 from looped_transformer.multi_head_attention import MultiHeadAttention
+from looped_transformer.swi_glu_based_ffn import SwiGLUBasedFFN
 from looped_transformer.types.model import ModelForwardOutput
 
 
@@ -54,12 +55,7 @@ class LoopedMNLI(nn.Module):
         self._dropout1 = nn.Dropout(dropout)
 
         self._normalization2 = nn.RMSNorm(dim)
-        self._transformer_ffn = nn.Sequential(
-            nn.Linear(dim, ffn_dim),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(ffn_dim, dim),
-        )
+        self._transformer_ffn = SwiGLUBasedFFN(dim, ffn_dim, dropout)
         self._dropout2 = nn.Dropout(dropout)
 
         self._halting_cell = HaltingCell(model_options)
@@ -141,7 +137,10 @@ class LoopedMNLI(nn.Module):
                 | (survivals < self._model_options.evaluation.halt_survival_threshold)
             )
             batches_halted = batches_halted | halt_batches
-            halting_times = halting_times - (self._model_options.max_iterations - 1 - t) * halt_batches
+            halting_times = (
+                halting_times
+                - (self._model_options.max_iterations - 1 - t) * halt_batches
+            )
 
             if torch.all(batches_halted):
                 break

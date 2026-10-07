@@ -3,12 +3,14 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class TransformerOptions:
-    ffn_dimension: int
+    ffn_dimension: int  # recommend: hidden_state * 8 / 3
     attention_heads_count: int
 
 
 @dataclass(frozen=True, slots=True)
 class TrainingOptions:
+    max_epochs: int
+
     dropout: float = 0.1
     residue_time_scaling: float = 0.75
 
