@@ -9,15 +9,13 @@ runtime:
   deterministic: false
 
 data:
-  train_file_path: data/multinli_1.0_train.txt
-  eval_file_path: data/multinli_1.0_dev_matched.txt
+  train_file_path: data/mnli_train.tsv
+  eval_file_path: data/mnli_matched.tsv
   output_dir: outputs
   batch_size: 32
-  delimiter: "\t"
   premise_column: sentence1
   hypothesis_column: sentence2
   label_column: gold_label
-  skip_invalid_rows: true
 
 tokenizer:
   pretrained_model_name: bert-base-uncased

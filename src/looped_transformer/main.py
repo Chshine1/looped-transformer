@@ -8,24 +8,24 @@ from typing import cast
 
 import pandas as pd
 import torch
-from pandas import DataFrame
 from pandas.io.parsers import TextFileReader
 from torch import Tensor
 from transformers import TensorType
+
 # noinspection protected-member
 from transformers.models.bert.tokenization_bert import BertTokenizerFast
 from transformers.utils import PaddingStrategy
 
+from looped_transformer.config import load_options
 from looped_transformer.config.data import DataOptions
 from looped_transformer.config.model import ModelOptions
-from looped_transformer.config import load_options
 from looped_transformer.config.runtime import RuntimeOptions
 from looped_transformer.config.tokenizer import TokenizerOptions
 from looped_transformer.loss import LoopedMNLILoss
 from looped_transformer.model import LoopedMNLI
 from looped_transformer.types.mnli import LogicRelation, get_logic_relation
 from looped_transformer.types.model import ModelEvalOutput, ModelTrainOutput
-from looped_transformer.utils.torch import resolve_dtype, resolve_device
+from looped_transformer.utils.torch import resolve_device, resolve_dtype
 
 
 class MNLIRunner:
@@ -104,7 +104,13 @@ class MNLIRunner:
             ),
         }
 
-    def _create_checkpoint(self, epoch: int, global_step: int, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler.LRScheduler):
+    def _create_checkpoint(
+        self,
+        epoch: int,
+        global_step: int,
+        optimizer: torch.optim.Optimizer,
+        scheduler: torch.optim.lr_scheduler.LRScheduler,
+    ):
         return {
             "epoch": epoch,
             "global_step": global_step,
@@ -113,14 +119,31 @@ class MNLIRunner:
             "scheduler": scheduler.state_dict(),
         }
 
-    def _read_batches(self, batch_size: int) -> DataFrame | TextFileReader:
+    def _read_batches(self, file_path: str, batch_size: int) -> TextFileReader:
         # noinspection argument-list
         return pd.read_csv(
-            self._data_options.train_file_path,
-            sep=self._data_options.delimiter,
+            file_path,
+            sep="\t",
+            dtype=str,
+            usecols=[
+                self._data_options.premise_column,
+                self._data_options.hypothesis_column,
+                self._data_options.label_column,
+            ],
             chunksize=batch_size,
-            on_bad_lines="skip" if self._data_options.skip_invalid_rows else "error",
         )
+
+    def _compute_row_count(self, file_path: str) -> int:
+        label = self._data_options.label_column
+        # noinspection argument-list
+        chunks = pd.read_csv(
+            file_path,
+            sep="\t",
+            dtype=str,
+            usecols=[label],
+            chunksize=100_000,
+        )
+        return sum(len(chunk) for chunk in chunks)
 
     def train(self) -> None:
         training = self._model_options.training
@@ -131,8 +154,7 @@ class MNLIRunner:
             eps=training.adam_epsilon,
             weight_decay=training.weight_decay,
         )
-        with Path(self._data_options.train_file_path).open(encoding="utf-8") as stream:
-            row_count = sum(1 for _ in stream) - 1
+        row_count = self._compute_row_count(self._data_options.train_file_path)
         batches_per_epoch = math.ceil(row_count / self._data_options.batch_size)
         steps_per_epoch = math.ceil(
             batches_per_epoch / training.gradient_accumulation_steps
@@ -166,17 +188,12 @@ class MNLIRunner:
 
         for epoch in range(training.max_epochs):
             self._model.train()
-            for batch_index, chunk in enumerate(self._read_batches(self._data_options.batch_size)):
-                labels = chunk[self._data_options.label_column].tolist()
-                known_labels = {"entailment", "contradiction", "neutral"}
-                chunk = chunk.loc[
-                    [
-                        isinstance(label, str) and label.lower().strip() in known_labels
-                        for label in labels
-                    ]
-                ]
-                if chunk.empty:
-                    continue
+            for batch_index, chunk in enumerate(
+                self._read_batches(
+                    self._data_options.train_file_path,
+                    self._data_options.batch_size,
+                )
+            ):
                 encoding = self._encode(
                     chunk[self._data_options.premise_column].tolist(),
                     chunk[self._data_options.hypothesis_column].tolist(),
@@ -230,7 +247,9 @@ class MNLIRunner:
                 if accuracy > best_accuracy:
                     best_accuracy = accuracy
                     torch.save(
-                        self._create_checkpoint(epoch + 1, global_step, optimizer, scheduler),
+                        self._create_checkpoint(
+                            epoch + 1, global_step, optimizer, scheduler
+                        ),
                         output_dir / "best.pt",
                     )
 
@@ -239,16 +258,10 @@ class MNLIRunner:
         total = 0
 
         # noinspection argument-list
-        for chunk in self._read_batches(self._model_options.evaluation.batch_size):
-            labels = chunk[self._data_options.label_column].tolist()
-            valid = [
-                isinstance(label, str)
-                and label.lower().strip() in {"entailment", "contradiction", "neutral"}
-                for label in labels
-            ]
-            chunk = chunk.loc[valid]
-            if chunk.empty:
-                continue
+        for chunk in self._read_batches(
+            self._data_options.eval_file_path,
+            self._model_options.evaluation.batch_size,
+        ):
             predictions = self.evaluate(
                 chunk[self._data_options.premise_column].tolist(),
                 chunk[self._data_options.hypothesis_column].tolist(),

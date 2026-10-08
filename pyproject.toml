@@ -54,6 +54,7 @@ ignore = ["E501"]
 quote-style = "double"
 
 [tool.pixi.tasks]
-typecheck = "pyrefly check"
+typecheck = 'cmd /d /c ""%CONDA_PREFIX%\Library\bin\pyrefly.exe" check"'
 format = "python -m ruff format ."
+clean-data = "python scripts/clean_mnli.py data/mnli_train.tsv data/mnli_matched.tsv data/mnli_mismatched.tsv"
 train = "python -m looped_transformer.main --config config.yaml"

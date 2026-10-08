@@ -8,8 +8,6 @@ class DataOptions:
     output_dir: str
 
     batch_size: int
-    delimiter: str
     premise_column: str
     hypothesis_column: str
     label_column: str
-    skip_invalid_rows: bool
