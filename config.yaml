@@ -23,7 +23,7 @@ tokenizer:
 model:
   hidden_state_dimension: 256
   output_classes_count: 3
-  max_iterations: 8
+  max_iterations: 6
   max_sequence_length: 128
   transformer:
     swi_glu_ffn_dimension: 704

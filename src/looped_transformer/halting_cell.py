@@ -3,7 +3,7 @@ from torch import Tensor, nn
 from torch.nn import functional
 
 from looped_transformer.config.model import ModelOptions
-from looped_transformer.multi_head_attention import MultiHeadAttention
+from looped_transformer.multi_head_attention import RoPEMultiHeadAttention
 from looped_transformer.types.halting_cell import HaltingResult
 
 
@@ -28,7 +28,9 @@ class HaltingCell(nn.Module):
 
         self._rnn_cell = nn.GRUCell(input_size=dim, hidden_size=dim)
         self._attention_normalization = nn.RMSNorm(dim)
-        self._attention = MultiHeadAttention(dim, heads_count, dropout)
+        self._attention = RoPEMultiHeadAttention(
+            dim, heads_count, model_options.max_sequence_length, dropout
+        )
         self._attention_dropout = nn.Dropout(dropout)
 
         self._mlp_normalization = nn.RMSNorm(dim)

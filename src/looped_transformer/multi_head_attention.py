@@ -6,8 +6,10 @@ import torch.nn.functional as functional
 from torch import Tensor
 
 
-class MultiHeadAttention(nn.Module):
-    def __init__(self, d_model: int, n_heads: int, dropout: float):
+class RoPEMultiHeadAttention(nn.Module):
+    def __init__(
+        self, d_model: int, n_heads: int, max_sequence_length: int, dropout: float
+    ):
         super().__init__()
         assert d_model % n_heads == 0, "d_model must be divisible by n_heads"
         self._d_model = d_model
@@ -23,6 +25,29 @@ class MultiHeadAttention(nn.Module):
         self._out_proj = nn.Linear(d_model, d_model)
         self._dropout = nn.Dropout(dropout)
 
+        self._rope_cos, self._rope_sin = self._compute_rope_transformations(
+            self._d_head, max_sequence_length
+        )
+
+    @staticmethod
+    def _compute_rope_transformations(model_dimension: int, max_sequence_length: int):
+        frequencies = 1.0 / (
+            100.0 ** (torch.arange(0, model_dimension, 2).float() / model_dimension)
+        )
+        t = torch.arange(max_sequence_length, dtype=torch.float32)
+        frequencies = torch.outer(t, frequencies)
+        cos = torch.cos(frequencies)
+        sin = torch.sin(frequencies)
+        return cos, sin
+
+    def _apply_rope(self, x: Tensor) -> Tensor:
+        seq_length = x.size(2)
+        x1, x2 = x.chunk(2, dim=-1)
+        return (
+            x * self._rope_cos[:seq_length]
+            + torch.cat([-x2, x1], dim=-1) * self._rope_sin[:seq_length]
+        )
+
     def forward(
         self, query_seq: Tensor, key_value_seq: Tensor, attention_mask: Tensor | None
     ) -> Tensor:
@@ -36,6 +61,9 @@ class MultiHeadAttention(nn.Module):
         q = q.reshape(batch, q_seq_length, self._n_heads, self._d_head).transpose(1, 2)
         k = k.reshape(batch, kv_seq_length, self._n_heads, self._d_head).transpose(1, 2)
         v = v.reshape(batch, kv_seq_length, self._n_heads, self._d_head).transpose(1, 2)
+
+        q = self._apply_rope(q)
+        k = self._apply_rope(k)
 
         scores = q @ k.transpose(2, 3) / self._sqrt_d_head
 
