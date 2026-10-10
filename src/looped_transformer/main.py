@@ -1,10 +1,11 @@
 import argparse
 import math
 import random
+import re
 from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pandas as pd
 import torch
@@ -110,6 +111,9 @@ class MNLIRunner:
         global_step: int,
         optimizer: torch.optim.Optimizer,
         scheduler: torch.optim.lr_scheduler.LRScheduler,
+        scaler: torch.amp.GradScaler,
+        best_accuracy: float,
+        evaluation_completed: bool,
     ):
         return {
             "epoch": epoch,
@@ -117,7 +121,70 @@ class MNLIRunner:
             "model": self._model.state_dict(),
             "optimizer": optimizer.state_dict(),
             "scheduler": scheduler.state_dict(),
+            "scaler": scaler.state_dict(),
+            "best_accuracy": best_accuracy,
+            "evaluation_completed": evaluation_completed,
+            "python_random_state": random.getstate(),
+            "torch_random_state": torch.get_rng_state(),
+            "cuda_random_state": (
+                torch.cuda.get_rng_state_all() if self._device.type == "cuda" else None
+            ),
         }
+
+    def _load_checkpoint(
+        self,
+        checkpoint_path: Path,
+        optimizer: torch.optim.Optimizer,
+        scheduler: torch.optim.lr_scheduler.LRScheduler,
+        scaler: torch.amp.GradScaler,
+    ) -> tuple[int, int, float, bool]:
+        checkpoint: dict[str, Any] = torch.load(
+            checkpoint_path, map_location=self._device, weights_only=True
+        )
+        self._model.load_state_dict(checkpoint["model"])
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        scheduler.load_state_dict(checkpoint["scheduler"])
+        if "scaler" in checkpoint:
+            scaler.load_state_dict(checkpoint["scaler"])
+        if "python_random_state" in checkpoint:
+            random.setstate(checkpoint["python_random_state"])
+        if "torch_random_state" in checkpoint:
+            torch.set_rng_state(checkpoint["torch_random_state"].cpu())
+        if self._device.type == "cuda" and checkpoint.get("cuda_random_state"):
+            torch.cuda.set_rng_state_all(
+                [state.cpu() for state in checkpoint["cuda_random_state"]]
+            )
+
+        epoch = int(checkpoint["epoch"])
+        evaluation_completed = bool(
+            checkpoint.get(
+                "evaluation_completed",
+                epoch % self._model_options.evaluation.evaluate_every_epochs != 0,
+            )
+        )
+        return (
+            epoch,
+            int(checkpoint.get("global_step", 0)),
+            float(checkpoint.get("best_accuracy", -1.0)),
+            evaluation_completed,
+        )
+
+    def _resolve_resume_path(self, resume: str) -> Path:
+        if resume != "latest":
+            path = Path(resume)
+            if not path.is_file():
+                raise FileNotFoundError(f"Checkpoint does not exist: {path}")
+            return path
+
+        output_dir = Path(self._data_options.output_dir)
+        candidates: list[tuple[int, Path]] = []
+        for path in output_dir.glob("checkpoint-epoch-*.pt"):
+            match = re.fullmatch(r"checkpoint-epoch-(\d+)\.pt", path.name)
+            if match:
+                candidates.append((int(match.group(1)), path))
+        if not candidates:
+            raise FileNotFoundError(f"No epoch checkpoints found in {output_dir}")
+        return max(candidates, key=lambda item: item[0])[1]
 
     def _read_batches(self, file_path: str, batch_size: int) -> TextFileReader:
         # noinspection argument-list
@@ -145,7 +212,7 @@ class MNLIRunner:
         )
         return sum(len(chunk) for chunk in chunks)
 
-    def train(self) -> None:
+    def train(self, resume: str | None = None) -> None:
         training = self._model_options.training
         optimizer = torch.optim.AdamW(
             self._model.parameters(),
@@ -185,8 +252,51 @@ class MNLIRunner:
         optimizer.zero_grad(set_to_none=True)
         global_step = 0
         best_accuracy = -1.0
+        start_epoch = 0
 
-        for epoch in range(training.max_epochs):
+        if resume is not None:
+            checkpoint_path = self._resolve_resume_path(resume)
+            (
+                start_epoch,
+                global_step,
+                best_accuracy,
+                evaluation_completed,
+            ) = self._load_checkpoint(checkpoint_path, optimizer, scheduler, scaler)
+            print(
+                f"resumed_from={checkpoint_path} completed_epochs={start_epoch} "
+                f"step={global_step}"
+            )
+            if not evaluation_completed:
+                accuracy = self.evaluate_file()
+                print(f"epoch={start_epoch} validation_accuracy={accuracy:.4%}")
+                if accuracy > best_accuracy:
+                    best_accuracy = accuracy
+                    torch.save(
+                        self._create_checkpoint(
+                            start_epoch,
+                            global_step,
+                            optimizer,
+                            scheduler,
+                            scaler,
+                            best_accuracy,
+                            True,
+                        ),
+                        output_dir / "best.pt",
+                    )
+                torch.save(
+                    self._create_checkpoint(
+                        start_epoch,
+                        global_step,
+                        optimizer,
+                        scheduler,
+                        scaler,
+                        best_accuracy,
+                        True,
+                    ),
+                    checkpoint_path,
+                )
+
+        for epoch in range(start_epoch, training.max_epochs):
             self._model.train()
             for batch_index, chunk in enumerate(
                 self._read_batches(
@@ -234,23 +344,51 @@ class MNLIRunner:
                         f"loss={loss.item():.4f} lr={scheduler.get_last_lr()[0]:.3e}"
                     )
 
-            if (epoch + 1) % training.save_every_epochs == 0:
-                checkpoint = self._create_checkpoint(
-                    epoch + 1, global_step, optimizer, scheduler
-                )
-                torch.save(checkpoint, output_dir / f"checkpoint-epoch-{epoch + 1}.pt")
-
             evaluation = self._model_options.evaluation
-            if (epoch + 1) % evaluation.evaluate_every_epochs == 0:
+            should_evaluate = (epoch + 1) % evaluation.evaluate_every_epochs == 0
+            checkpoint_path = output_dir / f"checkpoint-epoch-{epoch + 1}.pt"
+            should_save = (epoch + 1) % training.save_every_epochs == 0
+            if should_save:
+                checkpoint = self._create_checkpoint(
+                    epoch + 1,
+                    global_step,
+                    optimizer,
+                    scheduler,
+                    scaler,
+                    best_accuracy,
+                    not should_evaluate,
+                )
+                torch.save(checkpoint, checkpoint_path)
+
+            if should_evaluate:
                 accuracy = self.evaluate_file()
                 print(f"epoch={epoch + 1} validation_accuracy={accuracy:.4%}")
                 if accuracy > best_accuracy:
                     best_accuracy = accuracy
                     torch.save(
                         self._create_checkpoint(
-                            epoch + 1, global_step, optimizer, scheduler
+                            epoch + 1,
+                            global_step,
+                            optimizer,
+                            scheduler,
+                            scaler,
+                            accuracy,
+                            True,
                         ),
                         output_dir / "best.pt",
+                    )
+                if should_save:
+                    torch.save(
+                        self._create_checkpoint(
+                            epoch + 1,
+                            global_step,
+                            optimizer,
+                            scheduler,
+                            scaler,
+                            best_accuracy,
+                            True,
+                        ),
+                        checkpoint_path,
                     )
 
     def evaluate_file(self) -> float:
@@ -297,9 +435,16 @@ class MNLIRunner:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train the looped MNLI transformer")
     parser.add_argument("--config", default="config.yaml")
+    parser.add_argument(
+        "--resume",
+        metavar="CHECKPOINT",
+        help="resume from a checkpoint path, or use 'latest'",
+    )
     args = parser.parse_args()
     options = load_options(args.config)
-    MNLIRunner(options.model, options.data, options.tokenizer, options.runtime).train()
+    MNLIRunner(options.model, options.data, options.tokenizer, options.runtime).train(
+        args.resume
+    )
 
 
 if __name__ == "__main__":

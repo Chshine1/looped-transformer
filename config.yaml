@@ -30,7 +30,7 @@ model:
     gelu_ffn_dimension: 1024
     attention_heads_count: 8
   training:
-    max_epochs: 5
+    max_epochs: 50
     learning_rate: 0.00003
     weight_decay: 0.01
     adam_beta1: 0.9
