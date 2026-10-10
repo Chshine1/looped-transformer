@@ -33,10 +33,10 @@ class MNLIDataReader:
     ) -> Iterator[MNLIBatch]:
         path = self._paths[split]
         columns = [
-                    self._data_options.premise_column,
-                    self._data_options.hypothesis_column,
-                    self._data_options.label_column,
-                ]
+            self._data_options.premise_column,
+            self._data_options.hypothesis_column,
+            self._data_options.label_column,
+        ]
 
         if not shuffle:
             # noinspection argument-list

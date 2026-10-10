@@ -3,7 +3,7 @@ from torch import Tensor, nn
 from torch.nn import functional
 
 from looped_transformer.config.model import ModelOptions
-from looped_transformer.multi_head_attention import RoPEMultiHeadAttention
+from looped_transformer.modules.multi_head_attention import RoPEMultiHeadAttention
 from looped_transformer.types.halting_cell import HaltingResult
 
 

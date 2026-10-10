@@ -7,9 +7,9 @@ from torch.nn import functional
 
 from looped_transformer.config.model import ModelOptions
 from looped_transformer.config.tokenizer import TokenizerOptions
-from looped_transformer.halting_cell import HaltingCell, HaltingResult
-from looped_transformer.multi_head_attention import RoPEMultiHeadAttention
-from looped_transformer.swi_glu_transformer_block import SwiGLUTransformerBlock
+from looped_transformer.modules.halting_cell import HaltingCell, HaltingResult
+from looped_transformer.modules.multi_head_attention import RoPEMultiHeadAttention
+from looped_transformer.modules.swi_glu_transformer_block import SwiGLUTransformerBlock
 from looped_transformer.types.model import ModelForwardOutput
 
 

@@ -22,8 +22,8 @@ from looped_transformer.config.model import ModelOptions
 from looped_transformer.config.runtime import RuntimeOptions
 from looped_transformer.config.tokenizer import TokenizerOptions
 from looped_transformer.data_reader import MNLIDataReader
-from looped_transformer.loss import LoopedMNLILoss
-from looped_transformer.model import LoopedMNLI
+from looped_transformer.modules.loss import LoopedMNLILoss
+from looped_transformer.modules.model import LoopedMNLI
 from looped_transformer.types.data import DataSplit
 from looped_transformer.types.mnli import LogicRelation, get_logic_relation
 from looped_transformer.types.model import ModelEvalOutput, ModelTrainOutput
