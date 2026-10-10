@@ -74,7 +74,7 @@ class LoopedMNLI(nn.Module):
         frequencies = 1.0 / (
             5.1 ** (torch.arange(0, model_dimension, 2).float() / model_dimension)
         )
-        t = torch.arange(max_iterations, dtype=torch.float32)
+        t = torch.arange(1, max_iterations + 1, dtype=torch.float32)
         frequencies = torch.outer(t, frequencies)
         cos = torch.cos(frequencies)
         sin = torch.sin(frequencies)
@@ -87,7 +87,9 @@ class LoopedMNLI(nn.Module):
         h0: Tensor = self._token_embedding(input_ids)
         h: Tensor = self._dropout(h0)
 
-        cos, sin = self._compute_rope_transformations(dimension, self._model_options.max_iterations)
+        cos, sin = self._compute_rope_transformations(
+            dimension, self._model_options.max_iterations
+        )
 
         logits_list: list[Tensor] = []
         hazards_list: list[Tensor] = []
@@ -116,9 +118,13 @@ class LoopedMNLI(nn.Module):
             h = self._loop_normalization(h)
 
             h1, h2 = h.chunk(2, dim=-1)
-            h = h * cos[1] + torch.cat([-h2, h1], dim=-1) * sin[1]
+            h = torch.cat(
+                [h1 * cos[0] - h2 * sin[0], h2 * cos[0] + h1 * sin[0]], dim=-1
+            )
 
-            output = h * cos[t] + torch.cat([h2, -h1], dim=-1) * sin[t]
+            output = torch.cat(
+                [h1 * cos[t] + h2 * sin[t], h2 * cos[t] - h1 * sin[t]], dim=-1
+            )
 
             mask = padding_mask.unsqueeze(-1).to(output.dtype)
             pooled = (output * mask).sum(1) / mask.sum(1).clamp(min=1)
