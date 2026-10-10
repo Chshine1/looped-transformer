@@ -18,7 +18,12 @@ def main() -> None:
     )
     args = parser.parse_args()
     options = load_options(args.config)
-    checkpoint_manager_factory = CheckpointManagerFactory(options.model, options.data)
+    checkpoint_manager_factory = CheckpointManagerFactory(
+        options.model,
+        options.data,
+        options.runtime,
+        options.tokenizer,
+    )
     data_reader = MNLIDataReader(options.runtime, options.data)
     MNLIRunner(
         checkpoint_manager_factory,

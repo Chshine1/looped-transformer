@@ -16,6 +16,8 @@ data:
   premise_column: sentence1
   hypothesis_column: sentence2
   label_column: gold_label
+  shuffle_cache_dir: data/shuffled
+  shuffle_chunk_size: 600
 
 tokenizer:
   pretrained_model_name: bert-base-uncased

@@ -1,4 +1,4 @@
-from torch import nn, Tensor
+from torch import Tensor, nn
 from torch.nn import functional
 
 from looped_transformer.multi_head_attention import RoPEMultiHeadAttention

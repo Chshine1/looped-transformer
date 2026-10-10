@@ -1,11 +1,18 @@
-from dataclasses import dataclass
-from pathlib import Path
 import random
 import re
+from dataclasses import dataclass
+from pathlib import Path
+
 import torch
 from torch import nn
 
-from looped_transformer.config import DataOptions, ModelOptions
+from looped_transformer.artifacts import get_run_output_dir, write_manifest
+from looped_transformer.config import (
+    DataOptions,
+    ModelOptions,
+    RuntimeOptions,
+    TokenizerOptions,
+)
 from looped_transformer.types.train import TrainingState
 
 
@@ -131,15 +138,30 @@ class CheckpointManager:
 
 
 class CheckpointManagerFactory:
-    def __init__(self, model_options: ModelOptions, data_options: DataOptions) -> None:
+    def __init__(
+        self,
+        model_options: ModelOptions,
+        data_options: DataOptions,
+        runtime_options: RuntimeOptions,
+        tokenizer_options: TokenizerOptions,
+    ) -> None:
         self._model_options = model_options
         self._data_options = data_options
+        self._runtime_options = runtime_options
+        self._tokenizer_options = tokenizer_options
 
     def create(
         self, components: CheckpointComponents, device: torch.device
     ) -> CheckpointManager:
+        output_dir, identifier, spec = get_run_output_dir(
+            self._runtime_options,
+            self._data_options,
+            self._tokenizer_options,
+            self._model_options,
+        )
+        write_manifest(output_dir, identifier, spec)
         return CheckpointManager(
-            output_dir=Path(self._data_options.output_dir),
+            output_dir=output_dir,
             device=device,
             components=components,
             evaluate_every_epochs=self._model_options.evaluation.evaluate_every_epochs,

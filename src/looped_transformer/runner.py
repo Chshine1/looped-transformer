@@ -3,7 +3,6 @@ import random
 from collections.abc import Sequence
 from contextlib import nullcontext
 from dataclasses import replace
-from pathlib import Path
 from typing import cast
 
 import torch
@@ -15,8 +14,8 @@ from transformers.models.bert.tokenization_bert import BertTokenizerFast
 from transformers.utils import PaddingStrategy
 
 from looped_transformer.checkpoint_manager import (
-    CheckpointManagerFactory,
     CheckpointComponents,
+    CheckpointManagerFactory,
 )
 from looped_transformer.config.data import DataOptions
 from looped_transformer.config.model import ModelOptions
@@ -151,8 +150,6 @@ class MNLIRunner:
             enabled=self._runtime_options.amp_enabled
             and self._amp_dtype == torch.float16,
         )
-        output_dir = Path(self._data_options.output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
         optimizer.zero_grad(set_to_none=True)
 
         components = CheckpointComponents(
@@ -164,6 +161,7 @@ class MNLIRunner:
         checkpoint_manager = self._checkpoint_manager_factory.create(
             components, self._device
         )
+        print(f"output_dir={checkpoint_manager.output_dir}")
         state = TrainingState(
             epoch=0,
             global_step=0,
@@ -197,6 +195,7 @@ class MNLIRunner:
                 self._data_reader.get_batches_iterator(
                     DataSplit.TRAIN,
                     shuffle=True,
+                    seed=self._runtime_options.seed + epoch,
                 )
             ):
                 encoding = self._encode(batch.premises, batch.hypotheses)

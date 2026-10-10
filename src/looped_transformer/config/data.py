@@ -11,3 +11,6 @@ class DataOptions:
     premise_column: str
     hypothesis_column: str
     label_column: str
+
+    shuffle_cache_dir: str
+    shuffle_chunk_size: int
