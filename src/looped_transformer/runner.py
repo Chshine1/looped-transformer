@@ -8,8 +8,6 @@ from typing import cast
 
 import torch
 from torch import Tensor
-from torch.optim import Optimizer
-from torch.optim.lr_scheduler import LRScheduler
 from transformers import TensorType
 
 # noinspection protected-member
@@ -25,7 +23,6 @@ from looped_transformer.config.model import ModelOptions
 from looped_transformer.config.runtime import RuntimeOptions
 from looped_transformer.config.tokenizer import TokenizerOptions
 from looped_transformer.data_reader import MNLIDataReader
-from looped_transformer.modules.loss import LoopedMNLILoss
 from looped_transformer.modules.model import LoopedMNLI
 from looped_transformer.types.data import DataSplit
 from looped_transformer.types.mnli import LogicRelation, get_logic_relation
@@ -67,14 +64,6 @@ class MNLIRunner:
         self._model = LoopedMNLI(model_options, resolved_tokenizer_options).to(
             device=self._device, dtype=self._parameter_dtype
         )
-        training = model_options.training
-        self._loss = LoopedMNLILoss(
-            expected_time=training.expected_halting_time,
-            halt_scale=training.halting_loss_scale,
-            aux_scale=training.auxiliary_loss_scale,
-        ).to(self._device)
-
-        self._training_data_count = data_reader.count_examples(DataSplit.TRAIN)
 
     def _configure_runtime(self) -> None:
         options = self._runtime_options
@@ -120,57 +109,11 @@ class MNLIRunner:
             ),
         }
 
-    def legacy_train(self, resume: str | None) -> None:
-        training = self._model_options.training
-        optimizer = torch.optim.AdamW(
-            self._model.parameters(),
-            lr=training.learning_rate,
-            betas=(training.adam_beta1, training.adam_beta2),
-            eps=training.adam_epsilon,
-            weight_decay=training.weight_decay,
-        )
-
-        def get_scheduler(o: Optimizer) -> LRScheduler:
-            row_count = self._data_reader.count_examples(DataSplit.TRAIN)
-            batches_per_epoch = math.ceil(row_count / self._data_options.batch_size)
-            steps_per_epoch = math.ceil(
-                batches_per_epoch / training.gradient_accumulation_steps
-            )
-            total_steps = training.max_epochs * steps_per_epoch
-            warmup_steps = max(1, int(training.warmup_ratio * total_steps))
-            warmup = torch.optim.lr_scheduler.LinearLR(
-                o,
-                start_factor=training.warmup_start_factor,
-                end_factor=1.0,
-                total_iters=warmup_steps,
-            )
-            cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
-                o,
-                T_max=max(1, total_steps - warmup_steps),
-                eta_min=training.minimum_learning_rate,
-            )
-            return torch.optim.lr_scheduler.SequentialLR(
-                o, [warmup, cosine], [warmup_steps]
-            )
-
-        template = StageTemplate(
-            name="default",
-            data_reader=self._data_reader,
-            loss_fn=self._loss,
-            frozen_patterns=".*",
-            optimizer_factory=lambda _: optimizer,
-            scheduler_factory=get_scheduler,
-            epochs=training.max_epochs,
-        )
-        self.train([template], resume)
-
-    def train(self, stages: Sequence[StageTemplate], resume: str | None = None) -> None:
-        training = self._model_options.training
+    def train(self, stages: Sequence[StageTemplate], resume: str | None) -> None:
+        training_options = self._model_options.training
         for stage in stages:
             for name, param in self._model.named_parameters():
-                match = re.match(stage.frozen_patterns, name)
-                if match is not None:
-                    param.requires_grad = False
+                param.requires_grad = not bool(re.match(stage.frozen_patterns, name))
 
             optimizer = stage.optimizer_factory(
                 filter(lambda p: p.requires_grad, self._model.parameters())
@@ -199,6 +142,7 @@ class MNLIRunner:
                 evaluation_completed=True,
             )
 
+            # todo: staged resume and artifacts
             if resume is not None:
                 checkpoint_path = checkpoint_manager.resolve_resume_path(resume)
                 state = checkpoint_manager.load(checkpoint_path)
@@ -219,80 +163,90 @@ class MNLIRunner:
 
                     checkpoint_manager.save(checkpoint_path, state)
 
-            for epoch in range(state.epoch, training.max_epochs):
+            was_training = self._model.training
+            loss_module = stage.loss.to(self._device)
+            try:
                 self._model.train()
-                for batch_index, batch in enumerate(
-                    stage.data_reader.get_batches_iterator(
-                        DataSplit.TRAIN,
-                        shuffle=True,
-                        seed=self._runtime_options.seed + epoch,
-                    )
-                ):
-                    encoding = self._encode(batch.premises, batch.hypotheses)
-                    label_tensor = torch.tensor(
-                        [get_logic_relation(label).value for label in batch.labels],
-                        dtype=torch.long,
-                        device=self._device,
-                    )
-                    with self._autocast():
-                        output: ModelTrainOutput = self._model(
-                            encoding["input_ids"], encoding["attention_mask"]
+                for epoch in range(state.epoch, stage.epochs):
+                    for batch_index, batch in enumerate(
+                        stage.data_reader.get_batches_iterator(
+                            DataSplit.TRAIN,
+                            shuffle=True,
+                            seed=self._runtime_options.seed + epoch,
                         )
-                        loss = self._loss(output, label_tensor)
-                        scaled_loss = loss / training.gradient_accumulation_steps
-                    scaler.scale(scaled_loss).backward()
-
-                    if self._not_accumulation_batch_end(batch_index):
-                        continue
-
-                    scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(
-                        self._model.parameters(), training.max_gradient_norm
-                    )
-                    scale_before = scaler.get_scale()
-                    scaler.step(optimizer)
-                    scaler.update()
-                    scale_after = scaler.get_scale()
-                    optimizer.zero_grad(set_to_none=True)
-
-                    if scale_after < scale_before:
-                        continue
-
-                    scheduler.step()
-                    state.global_step += 1
-                    if state.global_step % training.log_every_steps == 0:
-                        print(
-                            f"epoch={epoch + 1} step={state.global_step} "
-                            f"loss={loss.item():.4f} lr={scheduler.get_last_lr()[0]:.3e}"
+                    ):
+                        encoding = self._encode(batch.premises, batch.hypotheses)
+                        label_tensor = torch.tensor(
+                            [get_logic_relation(label).value for label in batch.labels],
+                            dtype=torch.long,
+                            device=self._device,
                         )
+                        with self._autocast():
+                            output: ModelTrainOutput = self._model(
+                                encoding["input_ids"], encoding["attention_mask"]
+                            )
+                            loss = loss_module(output, label_tensor)
+                            scaled_loss = loss / self._get_accumulation_window_size(
+                                batch_index, stage.data_reader
+                            )
+                        scaler.scale(scaled_loss).backward()
 
-                should_evaluate = (
-                    epoch + 1
-                ) % self._model_options.evaluation.evaluate_every_epochs == 0
-                should_save = (epoch + 1) % training.save_every_epochs == 0
+                        if self._not_accumulation_batch_end(
+                            batch_index, stage.data_reader
+                        ):
+                            continue
 
-                state.epoch = epoch + 1
-                state.evaluation_completed = not should_evaluate
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(
+                            self._model.parameters(), training_options.max_gradient_norm
+                        )
+                        scale_before = scaler.get_scale()
+                        scaler.step(optimizer)
+                        scaler.update()
+                        scale_after = scaler.get_scale()
+                        optimizer.zero_grad(set_to_none=True)
 
-                if should_save:
-                    checkpoint_manager.save_epoch(state.epoch, state)
+                        if scale_after < scale_before:
+                            continue
 
-                if should_evaluate:
-                    accuracy = self.eval()
-                    print(f"epoch={state.epoch} validation_accuracy={accuracy:.4%}")
+                        scheduler.step()
+                        state.global_step += 1
+                        if state.global_step % training_options.log_every_steps == 0:
+                            print(
+                                f"epoch={epoch + 1} step={state.global_step} "
+                                f"loss={loss.item():.4f} lr={scheduler.get_last_lr()[0]:.3e}"
+                            )
+                    should_evaluate = (
+                        epoch + 1
+                    ) % self._model_options.evaluation.evaluate_every_epochs == 0
+                    should_save = (epoch + 1) % training_options.save_every_epochs == 0
 
-                    state.evaluation_completed = True
-
-                    if accuracy > state.best_accuracy:
-                        state.best_accuracy = accuracy
-                        checkpoint_manager.save_best(state)
+                    state.epoch = epoch + 1
+                    state.evaluation_completed = not should_evaluate
 
                     if should_save:
                         checkpoint_manager.save_epoch(state.epoch, state)
 
-    def _not_accumulation_batch_end(self, batch_index: int) -> bool:
+                    if should_evaluate:
+                        accuracy = self.eval()
+                        print(f"epoch={state.epoch} validation_accuracy={accuracy:.4%}")
+
+                        state.evaluation_completed = True
+
+                        if accuracy > state.best_accuracy:
+                            state.best_accuracy = accuracy
+                            checkpoint_manager.save_best(state)
+
+                        if should_save:
+                            checkpoint_manager.save_epoch(state.epoch, state)
+            finally:
+                self._model.train(was_training)
+
+    def _not_accumulation_batch_end(
+        self, batch_index: int, data_reader: MNLIDataReader
+    ) -> bool:
         final_batch = batch_index + 1 == math.ceil(
-            self._training_data_count / self._data_options.batch_size
+            data_reader.count_examples(DataSplit.TRAIN) / self._data_options.batch_size
         )
         return (
             (batch_index + 1) % self._model_options.training.gradient_accumulation_steps
@@ -300,33 +254,50 @@ class MNLIRunner:
             and not final_batch
         )
 
+    def _get_accumulation_window_size(
+        self, batch_index: int, data_reader: MNLIDataReader
+    ) -> int:
+        accumulation_steps = self._model_options.training.gradient_accumulation_steps
+        batches_count = math.ceil(
+            data_reader.count_examples(DataSplit.TRAIN) / self._data_options.batch_size
+        )
+
+        window_start = (batch_index // accumulation_steps) * accumulation_steps
+        window_end = min(window_start + accumulation_steps, batches_count)
+        return window_end - window_start
+
     def eval(self) -> float:
         correct = 0
         total = 0
+        was_training = self._model.training
 
-        for batch in self._data_reader.get_batches_iterator(
-            DataSplit.EVAL,
-            shuffle=False,
-        ):
-            encoding = self._encode(batch.premises, batch.hypotheses)
+        try:
             self._model.eval()
 
-            with torch.inference_mode(), self._autocast():
-                output: ModelEvalOutput = self._model(
-                    encoding["input_ids"], encoding["attention_mask"]
+            for batch in self._data_reader.get_batches_iterator(
+                DataSplit.EVAL,
+                shuffle=False,
+            ):
+                encoding = self._encode(batch.premises, batch.hypotheses)
+
+                with torch.inference_mode(), self._autocast():
+                    output: ModelEvalOutput = self._model(
+                        encoding["input_ids"], encoding["attention_mask"]
+                    )
+
+                predictions = tuple(
+                    LogicRelation(prediction.item())
+                    for prediction in output["logits"].argmax(dim=-1)
                 )
+                targets = [get_logic_relation(label) for label in batch.labels]
 
-            predictions = tuple(
-                LogicRelation(prediction.item())
-                for prediction in output["logits"].argmax(dim=-1)
-            )
-            targets = [get_logic_relation(label) for label in batch.labels]
-
-            correct += sum(
-                prediction == target
-                for prediction, target in zip(predictions, targets, strict=True)
-            )
-            total += len(targets)
+                correct += sum(
+                    prediction == target
+                    for prediction, target in zip(predictions, targets, strict=True)
+                )
+                total += len(targets)
+        finally:
+            self._model.train(was_training)
 
         if total == 0:
             raise ValueError("Evaluation data contains no recognized labels")

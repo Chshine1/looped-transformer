@@ -1,11 +1,9 @@
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
-from torch import Tensor
-from torch.nn import Parameter
+from torch import nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
-from transformers.utils import ModelOutput
 
 from looped_transformer.data_reader import MNLIDataReader
 
@@ -20,13 +18,11 @@ class TrainingState:
 
 @dataclass(frozen=True, slots=True)
 class StageTemplate:
+    # todo: separated learning rate
     name: str
     data_reader: MNLIDataReader
-    loss_fn: Callable[[ModelOutput, Tensor], Tensor]
-
+    loss: nn.Module
     frozen_patterns: str
-
-    optimizer_factory: Callable[[Iterable[Parameter]], Optimizer]
+    optimizer_factory: Callable[[Iterable[nn.parameter.Parameter]], Optimizer]
     scheduler_factory: Callable[[Optimizer], LRScheduler]
-
     epochs: int

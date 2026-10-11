@@ -25,6 +25,9 @@ class MNLIDataReader:
             DataSplit.EVAL: data_options.eval_file_path,
         }
 
+        # todo: thread safety?
+        self._examples_count: dict[DataSplit, int] = {}
+
     def get_batches_iterator(
         self,
         split: DataSplit,
@@ -77,6 +80,10 @@ class MNLIDataReader:
             yield self._to_batch(pending)
 
     def count_examples(self, split: DataSplit) -> int:
+        existing_count = self._examples_count.get(split, None)
+        if existing_count is not None:
+            return existing_count
+
         path = self._paths[split]
         label_col = self._data_options.label_column
 
@@ -88,7 +95,9 @@ class MNLIDataReader:
             usecols=[label_col],
             chunksize=100_000,
         )
-        return sum(len(chunk) for chunk in chunks)
+        count = sum(len(chunk) for chunk in chunks)
+        self._examples_count[split] = count
+        return count
 
     def _to_batch(self, df) -> MNLIBatch:
         return MNLIBatch(
