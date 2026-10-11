@@ -12,14 +12,12 @@ from looped_transformer.config.model import (
     TransformerOptions,
 )
 from looped_transformer.config.runtime import RuntimeOptions
-from looped_transformer.config.tokenizer import TokenizerOptions
 
 
 @dataclass(frozen=True, slots=True)
 class AppOptions:
     runtime: RuntimeOptions
     data: DataOptions
-    tokenizer: TokenizerOptions
     model: ModelOptions
 
 
@@ -31,7 +29,6 @@ def load_options(path: str | Path) -> AppOptions:
     return AppOptions(
         runtime=RuntimeOptions(**raw["runtime"]),
         data=DataOptions(**raw["data"]),
-        tokenizer=TokenizerOptions(**raw["tokenizer"]),
         model=ModelOptions(
             hidden_state_dimension=model_options["hidden_state_dimension"],
             output_classes_count=model_options["output_classes_count"],

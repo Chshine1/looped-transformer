@@ -6,18 +6,18 @@ from torch import Tensor
 from torch.nn import functional
 
 from looped_transformer.config.model import ModelOptions
-from looped_transformer.config.tokenizer import TokenizerOptions
 from looped_transformer.modules.halting_cell import HaltingCell, HaltingResult
 from looped_transformer.modules.multi_head_attention import RoPEMultiHeadAttention
 from looped_transformer.modules.swi_glu_transformer_block import SwiGLUTransformerBlock
 from looped_transformer.types.model import ModelForwardOutput
+from looped_transformer.types.tokenizer import TokenizerInfo
 
 
 class LoopedMNLI(nn.Module):
     def __init__(
         self,
         model_options: ModelOptions,
-        tokenizer_options: TokenizerOptions,
+        tokenizer_info: TokenizerInfo,
     ):
         super().__init__()
         self._model_options = model_options
@@ -26,10 +26,7 @@ class LoopedMNLI(nn.Module):
         dropout = model_options.training.dropout
         heads_count = model_options.transformer.attention_heads_count
         ffn_dim = model_options.transformer.swi_glu_ffn_dimension
-        if (
-            tokenizer_options.vocab_size is None
-            or tokenizer_options.pad_token_id is None
-        ):
+        if tokenizer_info.vocab_size is None or tokenizer_info.pad_token_id is None:
             raise ValueError(
                 "Tokenizer vocabulary metadata must be resolved before model creation"
             )
@@ -45,9 +42,9 @@ class LoopedMNLI(nn.Module):
         self._loop_normalization = nn.RMSNorm(dim)
 
         self._token_embedding = nn.Embedding(
-            tokenizer_options.vocab_size,
+            tokenizer_info.vocab_size,
             dim,
-            padding_idx=tokenizer_options.pad_token_id,
+            padding_idx=tokenizer_info.pad_token_id,
         )
         self._dropout = nn.Dropout(dropout)
 

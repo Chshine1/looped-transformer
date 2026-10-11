@@ -11,7 +11,6 @@ from looped_transformer.config import (
     DataOptions,
     ModelOptions,
     RuntimeOptions,
-    TokenizerOptions,
 )
 from looped_transformer.types.train import TrainingState
 
@@ -143,12 +142,10 @@ class CheckpointManagerFactory:
         model_options: ModelOptions,
         data_options: DataOptions,
         runtime_options: RuntimeOptions,
-        tokenizer_options: TokenizerOptions,
     ) -> None:
         self._model_options = model_options
         self._data_options = data_options
         self._runtime_options = runtime_options
-        self._tokenizer_options = tokenizer_options
 
     def create(
         self, components: CheckpointComponents, device: torch.device
@@ -156,7 +153,6 @@ class CheckpointManagerFactory:
         output_dir, identifier, spec = get_run_output_dir(
             self._runtime_options,
             self._data_options,
-            self._tokenizer_options,
             self._model_options,
         )
         write_manifest(output_dir, identifier, spec)

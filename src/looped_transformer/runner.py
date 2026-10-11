@@ -3,16 +3,8 @@ import random
 import re
 from collections.abc import Sequence
 from contextlib import nullcontext
-from dataclasses import replace
-from typing import cast
 
 import torch
-from torch import Tensor
-from transformers import TensorType
-
-# noinspection protected-member
-from transformers.models.bert.tokenization_bert import BertTokenizerFast
-from transformers.utils import PaddingStrategy
 
 from looped_transformer.checkpoint_manager import (
     CheckpointComponents,
@@ -21,9 +13,9 @@ from looped_transformer.checkpoint_manager import (
 from looped_transformer.config.data import DataOptions
 from looped_transformer.config.model import ModelOptions
 from looped_transformer.config.runtime import RuntimeOptions
-from looped_transformer.config.tokenizer import TokenizerOptions
 from looped_transformer.data_reader import MNLIDataReader
 from looped_transformer.modules.model import LoopedMNLI
+from looped_transformer.tokenizer import MNLITokenizer
 from looped_transformer.types.data import DataSplit
 from looped_transformer.types.mnli import LogicRelation, get_logic_relation
 from looped_transformer.types.model import ModelEvalOutput, ModelTrainOutput
@@ -34,11 +26,11 @@ from looped_transformer.utils.torch import resolve_device, resolve_dtype
 class MNLIRunner:
     def __init__(
         self,
+        tokenizer: MNLITokenizer,
         checkpoint_manager_factory: CheckpointManagerFactory,
         data_reader: MNLIDataReader,
         model_options: ModelOptions,
         data_options: DataOptions,
-        tokenizer_options: TokenizerOptions,
         runtime_options: RuntimeOptions,
     ):
         self._checkpoint_manager_factory = checkpoint_manager_factory
@@ -52,16 +44,8 @@ class MNLIRunner:
         self._amp_dtype = resolve_dtype(runtime_options.amp_dtype)
         self._configure_runtime()
 
-        tokenizer: BertTokenizerFast = BertTokenizerFast.from_pretrained(
-            tokenizer_options.pretrained_model_name
-        )
-        resolved_tokenizer_options = replace(
-            tokenizer_options,
-            vocab_size=tokenizer.vocab_size,
-            pad_token_id=cast(int, tokenizer.pad_token_id),
-        )
         self._tokenizer = tokenizer
-        self._model = LoopedMNLI(model_options, resolved_tokenizer_options).to(
+        self._model = LoopedMNLI(model_options, tokenizer.get_tokenizer_info()).to(
             device=self._device, dtype=self._parameter_dtype
         )
 
@@ -89,25 +73,6 @@ class MNLIRunner:
             if self._runtime_options.amp_enabled
             else nullcontext()
         )
-
-    def _encode(
-        self, premises: Sequence[str], hypotheses: Sequence[str]
-    ) -> dict[str, Tensor]:
-        # noinspection bad-argument-type
-        encoding = self._tokenizer(
-            text=premises,
-            text_pair=hypotheses,
-            padding=PaddingStrategy.MAX_LENGTH,
-            truncation=True,
-            max_length=self._model_options.max_sequence_length,
-            return_tensors=TensorType.PYTORCH,
-        )
-        return {
-            "input_ids": encoding["input_ids"].to(self._device, non_blocking=True),
-            "attention_mask": encoding["attention_mask"].to(
-                self._device, non_blocking=True
-            ),
-        }
 
     def train(self, stages: Sequence[StageTemplate], resume: str | None) -> None:
         training_options = self._model_options.training
@@ -175,7 +140,9 @@ class MNLIRunner:
                             seed=self._runtime_options.seed + epoch,
                         )
                     ):
-                        encoding = self._encode(batch.premises, batch.hypotheses)
+                        encoding = self._tokenizer.encode(
+                            batch.premises, batch.hypotheses
+                        )
                         label_tensor = torch.tensor(
                             [get_logic_relation(label).value for label in batch.labels],
                             dtype=torch.long,
@@ -183,7 +150,7 @@ class MNLIRunner:
                         )
                         with self._autocast():
                             output: ModelTrainOutput = self._model(
-                                encoding["input_ids"], encoding["attention_mask"]
+                                encoding.input_ids, encoding.attention_mask
                             )
                             loss = loss_module(output, label_tensor)
                             scaled_loss = loss / self._get_accumulation_window_size(
@@ -278,11 +245,11 @@ class MNLIRunner:
                 DataSplit.EVAL,
                 shuffle=False,
             ):
-                encoding = self._encode(batch.premises, batch.hypotheses)
+                encoding = self._tokenizer.encode(batch.premises, batch.hypotheses)
 
                 with torch.inference_mode(), self._autocast():
                     output: ModelEvalOutput = self._model(
-                        encoding["input_ids"], encoding["attention_mask"]
+                        encoding.input_ids, encoding.attention_mask
                     )
 
                 predictions = tuple(

@@ -19,9 +19,6 @@ data:
   shuffle_cache_dir: data/shuffled
   shuffle_chunk_size: 600
 
-tokenizer:
-  pretrained_model_name: bert-base-uncased
-
 model:
   hidden_state_dimension: 256
   output_classes_count: 3

@@ -59,7 +59,7 @@ def get_file_fingerprint(path: str | Path) -> dict[str, Any]:
     }
 
 
-def _get_run_artifact_spec(runtime: Any, data: Any, tokenizer: Any, model: Any) -> dict:
+def _get_run_artifact_spec(runtime: Any, data: Any, model: Any) -> dict:
     data_config = asdict(data)
     data_config.pop("output_dir", None)
     data_config.pop("shuffle_cache_dir", None)
@@ -71,15 +71,12 @@ def _get_run_artifact_spec(runtime: Any, data: Any, tokenizer: Any, model: Any) 
         "format": "looped-transformer-training-v1",
         "runtime": runtime,
         "data": data_config,
-        "tokenizer": tokenizer,
         "model": model,
     }
 
 
-def get_run_output_dir(
-    runtime: Any, data: Any, tokenizer: Any, model: Any
-) -> tuple[Path, str, dict]:
-    spec = _get_run_artifact_spec(runtime, data, tokenizer, model)
+def get_run_output_dir(runtime: Any, data: Any, model: Any) -> tuple[Path, str, dict]:
+    spec = _get_run_artifact_spec(runtime, data, model)
     identifier = get_artifact_id(spec)
     return Path(data.output_dir) / identifier, identifier, spec
 
