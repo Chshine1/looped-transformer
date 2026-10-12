@@ -12,18 +12,18 @@ class HaltingCell(nn.Module):
         super().__init__()
 
         dim = model_options.hidden_state_dimension
-        dropout = model_options.training.dropout
+        dropout = model_options.dropout
         heads_count = model_options.transformer.attention_heads_count
         mlp_dim = model_options.transformer.gelu_ffn_dimension
 
         self._hazard_adjustment_scale = nn.Parameter(
-            torch.tensor(model_options.training.halt_hazard_adjustment_scale)
+            torch.tensor(model_options.halting.hazard_adjustment_scale)
         )
         self._hazard_baseline_offset = nn.Parameter(
-            torch.tensor(model_options.training.halt_hazard_baseline_offset)
+            torch.tensor(model_options.halting.hazard_baseline_offset)
         )
         self._hazard_baseline_scale = nn.Parameter(
-            torch.tensor(model_options.training.halt_hazard_baseline_scale)
+            torch.tensor(model_options.halting.hazard_baseline_scale)
         )
 
         self._rnn_cell = nn.GRUCell(input_size=dim, hidden_size=dim)

@@ -23,7 +23,7 @@ class LoopedMNLI(nn.Module):
         self._model_options = model_options
 
         dim = model_options.hidden_state_dimension
-        dropout = model_options.training.dropout
+        dropout = model_options.dropout
         heads_count = model_options.transformer.attention_heads_count
         ffn_dim = model_options.transformer.swi_glu_ffn_dimension
         if tokenizer_info.vocab_size is None or tokenizer_info.pad_token_id is None:
@@ -34,8 +34,8 @@ class LoopedMNLI(nn.Module):
         self._log_gamma_logit = nn.Parameter(
             torch.tensor(
                 math.log(
-                    model_options.training.residue_time_scaling
-                    / (1 - model_options.training.residue_time_scaling)
+                    model_options.halting.residue_time_scaling
+                    / (1 - model_options.halting.residue_time_scaling)
                 )
             )
         )

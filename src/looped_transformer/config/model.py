@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from looped_transformer.config.training import TrainingOptions
+
 
 @dataclass(frozen=True, slots=True)
 class TransformerOptions:
@@ -9,30 +11,11 @@ class TransformerOptions:
 
 
 @dataclass(frozen=True, slots=True)
-class TrainingOptions:
-    stages: list[str]
-    max_epochs: int
-    learning_rate: float
-    weight_decay: float
-    adam_beta1: float
-    adam_beta2: float
-    adam_epsilon: float
-    max_gradient_norm: float
-    warmup_ratio: float
-    warmup_start_factor: float
-    minimum_learning_rate: float
-    expected_halting_time: int
-    halting_loss_scale: float
-    auxiliary_loss_scale: float
-    dropout: float
+class HaltingOptions:
     residue_time_scaling: float
-    gradient_accumulation_steps: int = 1
-    log_every_steps: int = 50
-    save_every_epochs: int = 1
-
-    halt_hazard_baseline_offset: float = -2.0
-    halt_hazard_baseline_scale: float = -2.0
-    halt_hazard_adjustment_scale: float = 0.9
+    hazard_baseline_offset: float = -2.0
+    hazard_baseline_scale: float = -2.0
+    hazard_adjustment_scale: float = 0.9
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,7 +32,9 @@ class ModelOptions:
     output_classes_count: int
     max_iterations: int
     max_sequence_length: int
+    dropout: float
 
     transformer: TransformerOptions
+    halting: HaltingOptions
     training: TrainingOptions
     evaluation: EvaluationOptions

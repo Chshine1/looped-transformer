@@ -89,9 +89,16 @@ class MNLIRunner:
         if resume_from is not None:
             state, load_components = checkpoint_manager.load(resume_from)
 
-        beginning_stage_index = next(
-            (i for i, s in enumerate(stages) if s.id == state.stage_id), 0
-        )
+        beginning_stage_index = 0
+        if state.stage_id:
+            beginning_stage_index = next(
+                (i for i, stage in enumerate(stages) if stage.id == state.stage_id),
+                -1,
+            )
+            if beginning_stage_index < 0:
+                raise ValueError(
+                    f"Checkpoint stage is not configured: {state.stage_id!r}"
+                )
 
         was_training = self._model.training
         try:
@@ -106,7 +113,8 @@ class MNLIRunner:
                 stage = dataclasses.replace(stage, loss=stage.loss.to(self._device))
                 for _ in range(state.epoch, stage.epochs):
                     self._run_epoch(stage, state, components)
-                    self._on_epoch_end(state, components, checkpoint_manager)
+                    state.epoch += 1
+                    self._on_epoch_end(stage, state, components, checkpoint_manager)
 
                 state.epoch = 0
         finally:
@@ -118,7 +126,6 @@ class MNLIRunner:
         state: TrainingState,
         components: CheckpointComponents,
     ) -> None:
-        training_options = self._model_options.training
         optimizer, scheduler, scaler = (
             components.optimizer,
             components.scheduler,
@@ -139,7 +146,7 @@ class MNLIRunner:
                 device=self._device,
             )
             acc_window_start, acc_window_end = self._get_accumulation_window(
-                batch_index, stage.data_reader
+                batch_index, stage
             )
             with self._autocast():
                 output: ModelTrainOutput = self._model(
@@ -154,7 +161,7 @@ class MNLIRunner:
 
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(
-                self._model.parameters(), training_options.max_gradient_norm
+                self._model.parameters(), stage.max_gradient_norm
             )
             scale_before = scaler.get_scale()
             scaler.step(optimizer)
@@ -167,7 +174,7 @@ class MNLIRunner:
 
             scheduler.step()
             state.global_step += 1
-            if state.global_step % training_options.log_every_steps == 0:
+            if state.global_step % self._model_options.training.log_every_steps == 0:
                 print(
                     f"epoch={state.epoch + 1} step={state.global_step} "
                     f"loss={loss.item():.4f} lr={scheduler.get_last_lr()[0]:.3e}"
@@ -181,7 +188,11 @@ class MNLIRunner:
             param.requires_grad = not bool(re.match(stage.frozen_patterns, name))
 
         optimizer = stage.optimizer_factory(
-            filter(lambda p: p.requires_grad, self._model.parameters())
+            (
+                (name, parameter)
+                for name, parameter in self._model.named_parameters()
+                if parameter.requires_grad
+            )
         )
         scheduler = stage.scheduler_factory(optimizer)
         scaler = torch.amp.GradScaler(
@@ -202,6 +213,7 @@ class MNLIRunner:
 
     def _on_epoch_end(
         self,
+        stage: StageTemplate,
         state: TrainingState,
         components: CheckpointComponents,
         checkpoint_manager: CheckpointManager,
@@ -209,7 +221,7 @@ class MNLIRunner:
         should_evaluate = (
             state.epoch % self._model_options.evaluation.evaluate_every_epochs == 0
         )
-        should_save = state.epoch % self._model_options.training.save_every_epochs == 0
+        should_save = state.epoch % stage.save_every_epochs == 0
 
         if should_save:
             checkpoint_manager.save_epoch(state, components)
@@ -223,11 +235,12 @@ class MNLIRunner:
                 checkpoint_manager.save_best(state, components)
 
     def _get_accumulation_window(
-        self, batch_index: int, data_reader: MNLIDataReader
+        self, batch_index: int, stage: StageTemplate
     ) -> tuple[int, int]:
-        accumulation_steps = self._model_options.training.gradient_accumulation_steps
+        accumulation_steps = stage.gradient_accumulation_steps
         batches_count = math.ceil(
-            data_reader.count_examples(DataSplit.TRAIN) / self._data_options.batch_size
+            stage.data_reader.count_examples(DataSplit.TRAIN)
+            / self._data_options.batch_size
         )
 
         window_start = (batch_index // accumulation_steps) * accumulation_steps

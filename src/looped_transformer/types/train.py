@@ -18,11 +18,15 @@ class TrainingState:
 
 @dataclass(frozen=True, slots=True)
 class StageTemplate:
-    # todo: separated learning rate
     id: str
     data_reader: MNLIDataReader
     loss: nn.Module
     frozen_patterns: str
-    optimizer_factory: Callable[[Iterable[nn.parameter.Parameter]], Optimizer]
+    optimizer_factory: Callable[
+        [Iterable[tuple[str, nn.parameter.Parameter]]], Optimizer
+    ]
     scheduler_factory: Callable[[Optimizer], LRScheduler]
     epochs: int
+    max_gradient_norm: float
+    gradient_accumulation_steps: int
+    save_every_epochs: int
