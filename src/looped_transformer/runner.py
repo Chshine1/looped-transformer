@@ -1,13 +1,15 @@
+import dataclasses
 import math
 import random
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 
 import torch
 
 from looped_transformer.checkpoint_manager import (
     CheckpointComponents,
+    CheckpointManager,
     CheckpointManagerFactory,
 )
 from looped_transformer.config.data import DataOptions
@@ -19,7 +21,7 @@ from looped_transformer.tokenizer import MNLITokenizer
 from looped_transformer.types.data import DataSplit
 from looped_transformer.types.mnli import LogicRelation, get_logic_relation
 from looped_transformer.types.model import ModelEvalOutput, ModelTrainOutput
-from looped_transformer.types.train import TrainingState, StageTemplate
+from looped_transformer.types.train import StageTemplate, TrainingState
 from looped_transformer.utils.torch import resolve_device, resolve_dtype
 
 
@@ -74,156 +76,155 @@ class MNLIRunner:
             else nullcontext()
         )
 
-    def train(self, stages: Sequence[StageTemplate], resume: str | None) -> None:
-        training_options = self._model_options.training
-        for stage in stages:
-            for name, param in self._model.named_parameters():
-                param.requires_grad = not bool(re.match(stage.frozen_patterns, name))
+    def train(self, stages: Sequence[StageTemplate], resume_from: str | None) -> None:
+        state = TrainingState(
+            stage_id="",
+            epoch=0,
+            global_step=0,
+            best_accuracy=-1.0,
+        )
 
-            optimizer = stage.optimizer_factory(
-                filter(lambda p: p.requires_grad, self._model.parameters())
+        checkpoint_manager = self._checkpoint_manager_factory.create(self._device)
+        load_components: Callable[[CheckpointComponents], None] | None = None
+        if resume_from is not None:
+            state, load_components = checkpoint_manager.load(resume_from)
+
+        beginning_stage_index = next(
+            (i for i, s in enumerate(stages) if s.id == state.stage_id), 0
+        )
+
+        was_training = self._model.training
+        try:
+            self._model.train()
+            for stage in stages[beginning_stage_index:]:
+                components = self._on_stage_begin(stage, state)
+                if load_components is not None:
+                    # noinspection calling-non-callable
+                    load_components(components)
+                    load_components = None
+
+                stage = dataclasses.replace(stage, loss=stage.loss.to(self._device))
+                for _ in range(state.epoch, stage.epochs):
+                    self._run_epoch(stage, state, components)
+                    self._on_epoch_end(state, components, checkpoint_manager)
+
+                state.epoch = 0
+        finally:
+            self._model.train(was_training)
+
+    def _run_epoch(
+        self,
+        stage: StageTemplate,
+        state: TrainingState,
+        components: CheckpointComponents,
+    ) -> None:
+        training_options = self._model_options.training
+        optimizer, scheduler, scaler = (
+            components.optimizer,
+            components.scheduler,
+            components.scaler,
+        )
+
+        for batch_index, batch in enumerate(
+            stage.data_reader.get_batches_iterator(
+                DataSplit.TRAIN,
+                shuffle=True,
+                seed=self._runtime_options.seed + state.epoch,
             )
-            scheduler = stage.scheduler_factory(optimizer)
-            scaler = torch.amp.GradScaler(
-                self._device.type,
-                enabled=self._runtime_options.amp_enabled
-                and self._amp_dtype == torch.float16,
+        ):
+            encoding = self._tokenizer.encode(batch.premises, batch.hypotheses)
+            label_tensor = torch.tensor(
+                [get_logic_relation(label).value for label in batch.labels],
+                dtype=torch.long,
+                device=self._device,
             )
+            acc_window_start, acc_window_end = self._get_accumulation_window(
+                batch_index, stage.data_reader
+            )
+            with self._autocast():
+                output: ModelTrainOutput = self._model(
+                    encoding.input_ids, encoding.attention_mask
+                )
+                loss = stage.loss(output, label_tensor)
+                scaled_loss = loss / (acc_window_end - acc_window_start)
+            scaler.scale(scaled_loss).backward()
+
+            if batch_index + 1 != acc_window_end:
+                continue
+
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(
+                self._model.parameters(), training_options.max_gradient_norm
+            )
+            scale_before = scaler.get_scale()
+            scaler.step(optimizer)
+            scaler.update()
+            scale_after = scaler.get_scale()
             optimizer.zero_grad(set_to_none=True)
 
-            components = CheckpointComponents(
-                model=self._model,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                scaler=scaler,
-            )
-            checkpoint_manager = self._checkpoint_manager_factory.create(
-                components, self._device
-            )
-            state = TrainingState(
-                epoch=0,
-                global_step=0,
-                best_accuracy=-1.0,
-                evaluation_completed=True,
-            )
+            if scale_after < scale_before:
+                continue
 
-            # todo: staged resume and artifacts
-            if resume is not None:
-                checkpoint_path = checkpoint_manager.resolve_resume_path(resume)
-                state = checkpoint_manager.load(checkpoint_path)
-
+            scheduler.step()
+            state.global_step += 1
+            if state.global_step % training_options.log_every_steps == 0:
                 print(
-                    f"resumed_from={checkpoint_path} "
-                    f"completed_epochs={state.epoch} step={state.global_step}"
+                    f"epoch={state.epoch + 1} step={state.global_step} "
+                    f"loss={loss.item():.4f} lr={scheduler.get_last_lr()[0]:.3e}"
                 )
 
-                if not state.evaluation_completed:
-                    accuracy = self.eval()
-                    print(f"epoch={state.epoch} validation_accuracy={accuracy:.4%}")
+    def _on_stage_begin(
+        self, stage: StageTemplate, state: TrainingState
+    ) -> CheckpointComponents:
+        state.stage_id = stage.id
+        for name, param in self._model.named_parameters():
+            param.requires_grad = not bool(re.match(stage.frozen_patterns, name))
 
-                    state.evaluation_completed = True
-                    if accuracy > state.best_accuracy:
-                        state.best_accuracy = accuracy
-                        checkpoint_manager.save_best(state)
-
-                    checkpoint_manager.save(checkpoint_path, state)
-
-            was_training = self._model.training
-            loss_module = stage.loss.to(self._device)
-            try:
-                self._model.train()
-                for epoch in range(state.epoch, stage.epochs):
-                    for batch_index, batch in enumerate(
-                        stage.data_reader.get_batches_iterator(
-                            DataSplit.TRAIN,
-                            shuffle=True,
-                            seed=self._runtime_options.seed + epoch,
-                        )
-                    ):
-                        encoding = self._tokenizer.encode(
-                            batch.premises, batch.hypotheses
-                        )
-                        label_tensor = torch.tensor(
-                            [get_logic_relation(label).value for label in batch.labels],
-                            dtype=torch.long,
-                            device=self._device,
-                        )
-                        with self._autocast():
-                            output: ModelTrainOutput = self._model(
-                                encoding.input_ids, encoding.attention_mask
-                            )
-                            loss = loss_module(output, label_tensor)
-                            scaled_loss = loss / self._get_accumulation_window_size(
-                                batch_index, stage.data_reader
-                            )
-                        scaler.scale(scaled_loss).backward()
-
-                        if self._not_accumulation_batch_end(
-                            batch_index, stage.data_reader
-                        ):
-                            continue
-
-                        scaler.unscale_(optimizer)
-                        torch.nn.utils.clip_grad_norm_(
-                            self._model.parameters(), training_options.max_gradient_norm
-                        )
-                        scale_before = scaler.get_scale()
-                        scaler.step(optimizer)
-                        scaler.update()
-                        scale_after = scaler.get_scale()
-                        optimizer.zero_grad(set_to_none=True)
-
-                        if scale_after < scale_before:
-                            continue
-
-                        scheduler.step()
-                        state.global_step += 1
-                        if state.global_step % training_options.log_every_steps == 0:
-                            print(
-                                f"epoch={epoch + 1} step={state.global_step} "
-                                f"loss={loss.item():.4f} lr={scheduler.get_last_lr()[0]:.3e}"
-                            )
-                    should_evaluate = (
-                        epoch + 1
-                    ) % self._model_options.evaluation.evaluate_every_epochs == 0
-                    should_save = (epoch + 1) % training_options.save_every_epochs == 0
-
-                    state.epoch = epoch + 1
-                    state.evaluation_completed = not should_evaluate
-
-                    if should_save:
-                        checkpoint_manager.save_epoch(state.epoch, state)
-
-                    if should_evaluate:
-                        accuracy = self.eval()
-                        print(f"epoch={state.epoch} validation_accuracy={accuracy:.4%}")
-
-                        state.evaluation_completed = True
-
-                        if accuracy > state.best_accuracy:
-                            state.best_accuracy = accuracy
-                            checkpoint_manager.save_best(state)
-
-                        if should_save:
-                            checkpoint_manager.save_epoch(state.epoch, state)
-            finally:
-                self._model.train(was_training)
-
-    def _not_accumulation_batch_end(
-        self, batch_index: int, data_reader: MNLIDataReader
-    ) -> bool:
-        final_batch = batch_index + 1 == math.ceil(
-            data_reader.count_examples(DataSplit.TRAIN) / self._data_options.batch_size
+        optimizer = stage.optimizer_factory(
+            filter(lambda p: p.requires_grad, self._model.parameters())
         )
-        return (
-            (batch_index + 1) % self._model_options.training.gradient_accumulation_steps
-            != 0
-            and not final_batch
+        scheduler = stage.scheduler_factory(optimizer)
+        scaler = torch.amp.GradScaler(
+            self._device.type,
+            enabled=self._runtime_options.amp_enabled
+            and self._amp_dtype == torch.float16,
+        )
+        optimizer.zero_grad(set_to_none=True)
+
+        components = CheckpointComponents(
+            model=self._model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            scaler=scaler,
         )
 
-    def _get_accumulation_window_size(
+        return components
+
+    def _on_epoch_end(
+        self,
+        state: TrainingState,
+        components: CheckpointComponents,
+        checkpoint_manager: CheckpointManager,
+    ) -> None:
+        should_evaluate = (
+            state.epoch % self._model_options.evaluation.evaluate_every_epochs == 0
+        )
+        should_save = state.epoch % self._model_options.training.save_every_epochs == 0
+
+        if should_save:
+            checkpoint_manager.save_epoch(state, components)
+
+        if should_evaluate:
+            accuracy = self.eval()
+            print(f"epoch={state.epoch} validation_accuracy={accuracy:.4%}")
+
+            if accuracy > state.best_accuracy:
+                state.best_accuracy = accuracy
+                checkpoint_manager.save_best(state, components)
+
+    def _get_accumulation_window(
         self, batch_index: int, data_reader: MNLIDataReader
-    ) -> int:
+    ) -> tuple[int, int]:
         accumulation_steps = self._model_options.training.gradient_accumulation_steps
         batches_count = math.ceil(
             data_reader.count_examples(DataSplit.TRAIN) / self._data_options.batch_size
@@ -231,7 +232,7 @@ class MNLIRunner:
 
         window_start = (batch_index // accumulation_steps) * accumulation_steps
         window_end = min(window_start + accumulation_steps, batches_count)
-        return window_end - window_start
+        return window_start, window_end
 
     def eval(self) -> float:
         correct = 0

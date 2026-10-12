@@ -9,6 +9,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from looped_transformer.config import DataOptions, ModelOptions, RuntimeOptions
+
 
 def _canonicalize(value: Any) -> Any:
     if is_dataclass(value) and not isinstance(value, type):
@@ -75,7 +77,9 @@ def _get_run_artifact_spec(runtime: Any, data: Any, model: Any) -> dict:
     }
 
 
-def get_run_output_dir(runtime: Any, data: Any, model: Any) -> tuple[Path, str, dict]:
+def get_run_output_dir(
+    runtime: RuntimeOptions, data: DataOptions, model: ModelOptions
+) -> tuple[Path, str, dict]:
     spec = _get_run_artifact_spec(runtime, data, model)
     identifier = get_artifact_id(spec)
     return Path(data.output_dir) / identifier, identifier, spec

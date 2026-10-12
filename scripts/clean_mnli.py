@@ -156,7 +156,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     for source in args.inputs:
-        destination = args.output_dir / source.name
+        destination = args.output_dir / source.id
         report = clean_file(source, destination, args.chunk_size)
         print(f"{source} -> {destination}")
         print(f"  rows: {report.input_rows} -> {report.output_rows}")

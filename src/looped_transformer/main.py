@@ -1,6 +1,6 @@
 import argparse
 import math
-from typing import Iterable
+from collections.abc import Iterable
 
 import torch
 from torch import nn
@@ -10,7 +10,7 @@ from torch.optim.lr_scheduler import LRScheduler
 from looped_transformer.checkpoint_manager import (
     CheckpointManagerFactory,
 )
-from looped_transformer.config import load_options, ModelOptions, DataOptions
+from looped_transformer.config import DataOptions, ModelOptions, load_options
 from looped_transformer.data_reader import MNLIDataReader
 from looped_transformer.modules.loss import LoopedMNLILoss
 from looped_transformer.runner import MNLIRunner
@@ -86,7 +86,7 @@ def _get_legacy_template(
         )
 
     return StageTemplate(
-        name="default",
+        id="default",
         data_reader=data_reader,
         loss=LoopedMNLILoss(
             expected_time=training.expected_halting_time,

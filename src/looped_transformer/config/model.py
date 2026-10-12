@@ -10,6 +10,7 @@ class TransformerOptions:
 
 @dataclass(frozen=True, slots=True)
 class TrainingOptions:
+    stages: list[str]
     max_epochs: int
     learning_rate: float
     weight_decay: float
