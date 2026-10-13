@@ -15,6 +15,8 @@ class RoPEMultiHeadAttention(nn.Module):
         self._d_model = d_model
         self._n_heads = n_heads
         self._d_head = d_model // n_heads
+        if self._d_head % 2 != 0:
+            raise ValueError("The attention head dimension must be even for RoPE")
 
         self._sqrt_d_head = math.sqrt(self._d_head)
 
@@ -25,9 +27,11 @@ class RoPEMultiHeadAttention(nn.Module):
         self._out_proj = nn.Linear(d_model, d_model)
         self._dropout = nn.Dropout(dropout)
 
-        self._rope_cos, self._rope_sin = self._compute_rope_transformations(
+        rope_cos, rope_sin = self._compute_rope_transformations(
             self._d_head, max_sequence_length
         )
+        self.register_buffer("_rope_cos", rope_cos, persistent=False)
+        self.register_buffer("_rope_sin", rope_sin, persistent=False)
 
     @staticmethod
     def _compute_rope_transformations(model_dimension: int, max_sequence_length: int):
@@ -42,11 +46,16 @@ class RoPEMultiHeadAttention(nn.Module):
 
     def _apply_rope(self, x: Tensor) -> Tensor:
         seq_length = x.size(2)
+        if seq_length > self._rope_cos.size(0):
+            raise ValueError(
+                f"Sequence length {seq_length} exceeds the configured maximum "
+                f"{self._rope_cos.size(0)}"
+            )
+
         x1, x2 = x.chunk(2, dim=-1)
-        return (
-            x * self._rope_cos[:seq_length]
-            + torch.cat([-x2, x1], dim=-1) * self._rope_sin[:seq_length]
-        )
+        cos = self._rope_cos[:seq_length].to(dtype=x.dtype)
+        sin = self._rope_sin[:seq_length].to(dtype=x.dtype)
+        return torch.cat([x1 * cos - x2 * sin, x2 * cos + x1 * sin], dim=-1)
 
     def forward(
         self, query_seq: Tensor, key_value_seq: Tensor, attention_mask: Tensor | None

@@ -16,6 +16,7 @@ from looped_transformer.config.data import DataOptions
 from looped_transformer.config.model import ModelOptions
 from looped_transformer.config.runtime import RuntimeOptions
 from looped_transformer.data_reader import MNLIDataReader
+from looped_transformer.modules.loss import get_loop_metrics
 from looped_transformer.modules.model import LoopedMNLI
 from looped_transformer.tokenizer import MNLITokenizer
 from looped_transformer.types.data import DataSplit
@@ -131,6 +132,10 @@ class MNLIRunner:
             components.scheduler,
             components.scaler,
         )
+        logged_loss_sum = 0.0
+        logged_batches = 0
+        logged_loop_cross_entropy: torch.Tensor | None = None
+        logged_expected_iterations: torch.Tensor | None = None
 
         for batch_index, batch in enumerate(
             stage.data_reader.get_batches_iterator(
@@ -140,6 +145,8 @@ class MNLIRunner:
             )
         ):
             encoding = self._tokenizer.encode(batch.premises, batch.hypotheses)
+            input_ids = encoding.input_ids.to(self._device)
+            attention_mask = encoding.attention_mask.to(self._device)
             label_tensor = torch.tensor(
                 [get_logic_relation(label).value for label in batch.labels],
                 dtype=torch.long,
@@ -149,11 +156,21 @@ class MNLIRunner:
                 batch_index, stage
             )
             with self._autocast():
-                output: ModelTrainOutput = self._model(
-                    encoding.input_ids, encoding.attention_mask
-                )
+                output: ModelTrainOutput = self._model(input_ids, attention_mask)
                 loss = stage.loss(output, label_tensor)
                 scaled_loss = loss / (acc_window_end - acc_window_start)
+            logged_loss_sum += loss.detach().item()
+            logged_batches += 1
+            with torch.no_grad():
+                batch_loop_cross_entropy, batch_expected_iterations = get_loop_metrics(
+                    output, label_tensor
+                )
+            if logged_loop_cross_entropy is None:
+                logged_loop_cross_entropy = torch.zeros_like(batch_loop_cross_entropy)
+                logged_expected_iterations = torch.zeros_like(batch_expected_iterations)
+            assert logged_expected_iterations is not None
+            logged_loop_cross_entropy += batch_loop_cross_entropy
+            logged_expected_iterations += batch_expected_iterations
             scaler.scale(scaled_loss).backward()
 
             if batch_index + 1 != acc_window_end:
@@ -175,10 +192,28 @@ class MNLIRunner:
             scheduler.step()
             state.global_step += 1
             if state.global_step % self._model_options.training.log_every_steps == 0:
+                if (
+                    logged_loop_cross_entropy is None
+                    or logged_expected_iterations is None
+                ):
+                    raise RuntimeError("Training metric accumulator is empty")
+                loop_cross_entropy = logged_loop_cross_entropy / logged_batches
+                expected_iterations = logged_expected_iterations / logged_batches
+                loop_values = ",".join(
+                    f"{value:.3f}"
+                    for value in loop_cross_entropy.detach().cpu().tolist()
+                )
                 print(
                     f"epoch={state.epoch + 1} step={state.global_step} "
-                    f"loss={loss.item():.4f} lr={scheduler.get_last_lr()[0]:.3e}"
+                    f"mean_loss={logged_loss_sum / logged_batches:.4f} "
+                    f"loop_ce=[{loop_values}] "
+                    f"expected_iterations={expected_iterations.item():.3f} "
+                    f"lr={scheduler.get_last_lr()[0]:.3e}"
                 )
+                logged_loss_sum = 0.0
+                logged_batches = 0
+                logged_loop_cross_entropy = None
+                logged_expected_iterations = None
 
     def _on_stage_begin(
         self, stage: StageTemplate, state: TrainingState
@@ -186,6 +221,10 @@ class MNLIRunner:
         state.stage_id = stage.id
         for name, param in self._model.named_parameters():
             param.requires_grad = not bool(re.match(stage.frozen_patterns, name))
+        for name, module in self._model.named_modules():
+            if name == "":
+                continue
+            module.train(not bool(re.match(stage.evaluation_patterns, name)))
 
         optimizer = stage.optimizer_factory(
             (
@@ -250,7 +289,7 @@ class MNLIRunner:
     def eval(self) -> float:
         correct = 0
         total = 0
-        was_training = self._model.training
+        training_modes = [(module, module.training) for module in self._model.modules()]
 
         try:
             self._model.eval()
@@ -260,11 +299,11 @@ class MNLIRunner:
                 shuffle=False,
             ):
                 encoding = self._tokenizer.encode(batch.premises, batch.hypotheses)
+                input_ids = encoding.input_ids.to(self._device)
+                attention_mask = encoding.attention_mask.to(self._device)
 
                 with torch.inference_mode(), self._autocast():
-                    output: ModelEvalOutput = self._model(
-                        encoding.input_ids, encoding.attention_mask
-                    )
+                    output: ModelEvalOutput = self._model(input_ids, attention_mask)
 
                 predictions = tuple(
                     LogicRelation(prediction.item())
@@ -278,7 +317,8 @@ class MNLIRunner:
                 )
                 total += len(targets)
         finally:
-            self._model.train(was_training)
+            for module, training in training_modes:
+                module.train(training)
 
         if total == 0:
             raise ValueError("Evaluation data contains no recognized labels")

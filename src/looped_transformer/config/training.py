@@ -26,6 +26,7 @@ def require_mapping(value: Any, name: str) -> Mapping[str, Any]:
 class CommonStageOptions:
     epochs: int
     frozen_patterns: str = r"(?!)"
+    evaluation_patterns: str = r"(?!)"
     max_gradient_norm: float = 1.0
     gradient_accumulation_steps: int = 1
     save_every_epochs: int = 1
@@ -42,6 +43,7 @@ class CommonStageOptions:
         if self.save_every_epochs <= 0:
             raise ValueError("save_every_epochs must be positive")
         re.compile(self.frozen_patterns)
+        re.compile(self.evaluation_patterns)
 
     @classmethod
     def model_validate(cls, value: Any) -> Self:
@@ -51,6 +53,7 @@ class CommonStageOptions:
             {"epochs"},
             {
                 "frozen_patterns",
+                "evaluation_patterns",
                 "max_gradient_norm",
                 "gradient_accumulation_steps",
                 "save_every_epochs",
@@ -59,6 +62,7 @@ class CommonStageOptions:
         return cls(
             epochs=raw["epochs"],
             frozen_patterns=raw.get("frozen_patterns", r"(?!)"),
+            evaluation_patterns=raw.get("evaluation_patterns", r"(?!)"),
             max_gradient_norm=raw.get("max_gradient_norm", 1.0),
             gradient_accumulation_steps=raw.get("gradient_accumulation_steps", 1),
             save_every_epochs=raw.get("save_every_epochs", 1),

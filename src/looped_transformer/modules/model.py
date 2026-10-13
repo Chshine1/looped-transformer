@@ -14,6 +14,8 @@ from looped_transformer.types.tokenizer import TokenizerInfo
 
 
 class LoopedMNLI(nn.Module):
+    UNIQUE_TRANSFORMER_BLOCKS = 2
+
     def __init__(
         self,
         model_options: ModelOptions,
@@ -31,14 +33,23 @@ class LoopedMNLI(nn.Module):
                 "Tokenizer vocabulary metadata must be resolved before model creation"
             )
 
-        self._log_gamma_logit = nn.Parameter(
-            torch.tensor(
-                math.log(
-                    model_options.halting.residue_time_scaling
-                    / (1 - model_options.halting.residue_time_scaling)
-                )
-            )
+        scaling = model_options.residual_scaling
+        expected_iterations = (
+            scaling.expected_iterations or model_options.max_iterations
         )
+        if not 1 <= expected_iterations <= model_options.max_iterations:
+            raise ValueError("expected_iterations must be within [1, max_iterations]")
+        self._static_residual_scale = scaling.multiplier / (
+            expected_iterations * math.sqrt(self.UNIQUE_TRANSFORMER_BLOCKS)
+        )
+        self._log_gamma_logit: nn.Parameter | None = None
+        if scaling.mode == "geometric":
+            gamma = model_options.halting.residue_time_scaling
+            if not 0 < gamma < 1:
+                raise ValueError("legacy residue_time_scaling must be in (0, 1)")
+            self._log_gamma_logit = nn.Parameter(
+                torch.tensor(math.log(gamma / (1 - gamma)))
+            )
         self._loop_normalization = nn.RMSNorm(dim)
 
         self._token_embedding = nn.Embedding(
@@ -66,6 +77,12 @@ class LoopedMNLI(nn.Module):
         self._classify_normalization = nn.RMSNorm(dim)
         self._classifier = nn.Linear(dim, model_options.output_classes_count)
 
+        loop_rope_cos, loop_rope_sin = self._compute_rope_transformations(
+            dim, model_options.max_iterations
+        )
+        self.register_buffer("_loop_rope_cos", loop_rope_cos, persistent=False)
+        self.register_buffer("_loop_rope_sin", loop_rope_sin, persistent=False)
+
     @staticmethod
     def _compute_rope_transformations(model_dimension: int, max_iterations: int):
         frequencies = 1.0 / (
@@ -77,6 +94,17 @@ class LoopedMNLI(nn.Module):
         sin = torch.sin(frequencies)
         return cos, sin
 
+    def residual_scale(self, iteration: int) -> Tensor:
+        """Per-branch coefficient; the static budget never depends on halting."""
+        if self._log_gamma_logit is None:
+            return self._token_embedding.weight.new_tensor(self._static_residual_scale)
+        return torch.exp(iteration * functional.logsigmoid(self._log_gamma_logit)) / 2
+
+    def injection_scale(self, iteration: int) -> Tensor:
+        if self._model_options.residual_scaling.mode == "static":
+            return self.residual_scale(iteration)
+        return self._token_embedding.weight.new_tensor(1.0)
+
     def forward(self, input_ids: Tensor, padding_mask: Tensor) -> ModelForwardOutput:
         dimension = self._model_options.hidden_state_dimension
         batch_size, seq_length = input_ids.shape
@@ -84,34 +112,33 @@ class LoopedMNLI(nn.Module):
         h0: Tensor = self._token_embedding(input_ids)
         h: Tensor = self._dropout(h0)
 
-        cos, sin = self._compute_rope_transformations(
-            dimension, self._model_options.max_iterations
-        )
+        cos = self._loop_rope_cos.to(dtype=h.dtype)
+        sin = self._loop_rope_sin.to(dtype=h.dtype)
 
         logits_list: list[Tensor] = []
         hazards_list: list[Tensor] = []
         survivals_list: list[Tensor] = [
-            torch.ones(batch_size, device=input_ids.device, dtype=h.dtype)
+            torch.ones(batch_size, device=h.device, dtype=h.dtype)
         ]
 
         halting_hidden_state = torch.zeros(
-            batch_size, seq_length, dimension, device=input_ids.device, dtype=h.dtype
+            batch_size, seq_length, dimension, device=h.device, dtype=h.dtype
         )
         halting_times = (self._model_options.max_iterations - 1) * torch.ones(
-            batch_size, device=input_ids.device, dtype=torch.long
+            batch_size, device=h.device, dtype=torch.long
         )
-        batches_halted = torch.zeros(batch_size, device=input_ids.device).bool()
+        batches_halted = torch.zeros(batch_size, device=h.device, dtype=torch.bool)
 
         for t in range(self._model_options.max_iterations):
-            scale = torch.exp(t * functional.logsigmoid(self._log_gamma_logit))
+            scale = self.residual_scale(t)
 
             if t > 0:
-                h = h + self._injection_gate * self._input_injection(
-                    h, h0, padding_mask
-                )
+                h = h + self.injection_scale(
+                    t
+                ) * self._injection_gate * self._input_injection(h, h0, padding_mask)
 
-            h = self._transformer_block1(h, padding_mask, scale / 2)
-            h = self._transformer_block2(h, padding_mask, scale / 2)
+            h = self._transformer_block1(h, padding_mask, scale)
+            h = self._transformer_block2(h, padding_mask, scale)
             h = self._loop_normalization(h)
 
             h1, h2 = h.chunk(2, dim=-1)
@@ -168,7 +195,7 @@ class LoopedMNLI(nn.Module):
                 "halt_probabilities": timed_hazards * timed_survivals,
             }
 
-        batch_indices = torch.arange(batch_size, device=input_ids.device)
+        batch_indices = torch.arange(batch_size, device=h.device)
 
         return {
             "mode": "eval",

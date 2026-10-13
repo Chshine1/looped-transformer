@@ -25,43 +25,143 @@ model:
   max_iterations: 6
   max_sequence_length: 128
   dropout: 0.1
+  residual_scaling:
+    mode: static
+    expected_iterations: 6.0
+    multiplier: 1.0  # coefficient = multiplier / (expected_iterations * sqrt(2))
   transformer:
     swi_glu_ffn_dimension: 704
     gelu_ffn_dimension: 1024
     attention_heads_count: 8
   halting:
-    residue_time_scaling: 0.75
     hazard_baseline_offset: -2.0
     hazard_baseline_scale: -2.0
     hazard_adjustment_scale: 0.9
   training:
     log_every_steps: 50
     stages:
-      - default
+      - backbone_warmup
     stage_templates:
-      default:
+      backbone_warmup:
         type: looped_mnli
         common:
-          epochs: 50
-          frozen_patterns: "(?!)"
+          epochs: 4
+          frozen_patterns: '^_halting_cell\.'
+          evaluation_patterns: '^_halting_cell(?:\.|$)'
           max_gradient_norm: 1.0
           gradient_accumulation_steps: 1
           save_every_epochs: 1
         optimizer:
           learning_rates:
-            ".*": 0.00003
+            '^$': 0.001
+            '_loop_normalization': 0.0005
+            '_token_embedding': 0.0005
+            '_input_injection(?:\..*)?': 0.0005
+            '_transformer_block[12](?:\..*)?': 0.0005
+            '_classify_normalization': 0.0005
+            '_classifier': 0.0005
           weight_decay: 0.01
           beta1: 0.9
           beta2: 0.999
           epsilon: 0.00000001
         scheduler:
-          warmup_ratio: 0.1
+          type: warmup_cosine
+          warmup_ratio: 0.06
           warmup_start_factor: 0.1
-          minimum_learning_rate: 0.000001
+          minimum_learning_rate_factor: 0.1
         loss:
-          expected_halting_time: 4
-          halting_loss_scale: 0.05
-          auxiliary_loss_scale: 0.1
+          type: mean_loop_cross_entropy
+      depth_training:
+        type: looped_mnli
+        common:
+          epochs: 8
+          frozen_patterns: '^_halting_cell\.'
+          evaluation_patterns: '^_halting_cell(?:\.|$)'
+          max_gradient_norm: 1.0
+          gradient_accumulation_steps: 1
+          save_every_epochs: 1
+        optimizer:
+          learning_rates:
+            '^$': 0.0003
+            '_loop_normalization': 0.0002
+            '_token_embedding': 0.0002
+            '_input_injection(?:\..*)?': 0.0002
+            '_transformer_block[12](?:\..*)?': 0.0002
+            '_classify_normalization': 0.0002
+            '_classifier': 0.0002
+          weight_decay: 0.01
+          beta1: 0.9
+          beta2: 0.999
+          epsilon: 0.00000001
+        scheduler:
+          type: warmup_cosine
+          warmup_ratio: 0.02
+          warmup_start_factor: 0.5
+          minimum_learning_rate_factor: 0.1
+        loss:
+          type: depth_weighted_cross_entropy
+          depth_weight_growth: 0.5
+          monotonic_loss_scale: 0.2
+      controller_training:
+        type: looped_mnli
+        common:
+          epochs: 2
+          frozen_patterns: '^(?!_halting_cell\.).*'
+          evaluation_patterns: '^(?!_halting_cell(?:\.|$)).*'
+          max_gradient_norm: 1.0
+          gradient_accumulation_steps: 1
+          save_every_epochs: 1
+        optimizer:
+          learning_rates:
+            '_halting_cell(?:\..*)?': 0.0005
+          weight_decay: 0.01
+          beta1: 0.9
+          beta2: 0.999
+          epsilon: 0.00000001
+        scheduler:
+          type: warmup_constant
+          warmup_ratio: 0.05
+          warmup_start_factor: 0.1
+        loss:
+          type: oracle_halting
+          compute_cost: 0.02
+          target_temperature: 0.1
+      joint:
+        type: looped_mnli
+        common:
+          epochs: 4
+          frozen_patterns: '(?!)'
+          evaluation_patterns: '(?!)'
+          max_gradient_norm: 1.0
+          gradient_accumulation_steps: 1
+          save_every_epochs: 1
+        optimizer:
+          learning_rates:
+            '_halting_cell(?:\..*)?': 0.0002
+            '_input_injection(?:\..*)?': 0.0001
+            '^$': 0.0001
+            '_loop_normalization': 0.00005
+            '_token_embedding': 0.00005
+            '_transformer_block[12](?:\..*)?': 0.00005
+            '_classify_normalization': 0.00005
+            '_classifier': 0.00005
+          weight_decay: 0.01
+          beta1: 0.9
+          beta2: 0.999
+          epsilon: 0.00000001
+        scheduler:
+          type: warmup_cosine
+          warmup_ratio: 0.02
+          warmup_start_factor: 0.5
+          minimum_learning_rate_factor: 0.1
+        loss:
+          type: adaptive_joint
+          compute_cost: 0.02
+          target_temperature: 0.1
+          controller_loss_scale: 0.1
+          depth_loss_scale: 0.1
+          depth_weight_growth: 0.5
+          monotonic_loss_scale: 0.2
   evaluation:
     halt_hazard_threshold: 0.6
     halt_survival_threshold: 0.05

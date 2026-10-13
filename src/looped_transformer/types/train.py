@@ -22,6 +22,7 @@ class StageTemplate:
     data_reader: MNLIDataReader
     loss: nn.Module
     frozen_patterns: str
+    evaluation_patterns: str
     optimizer_factory: Callable[
         [Iterable[tuple[str, nn.parameter.Parameter]]], Optimizer
     ]

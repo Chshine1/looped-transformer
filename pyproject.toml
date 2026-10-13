@@ -11,16 +11,23 @@ requires = ["hatchling"]
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]
-platforms = ["win-64"]
+platforms = [
+    { name = "default-win-64", platform = "win-64", cuda = "12.0" },
+    { name = "default-linux-64", platform = "linux-64", cuda = "12.0" }
+]
 
-[tool.pixi.system-requirements]
-cuda = "12.6"
-
-[tool.pixi.pypi-options.dependency-overrides]
-torch = { version = "*", index = "https://download.pytorch.org/whl/cu126" }
+[tool.pixi.environments]
+default = { features = ["cu126"] }
+fallback = { features = ["cu124"] }
 
 [tool.pixi.pypi-dependencies]
 looped_transformer = { path = ".", editable = true }
+
+[tool.pixi.feature.cu126.pypi-dependencies]
+torch = { version = "*", index = "https://download.pytorch.org/whl/cu126" }
+
+[tool.pixi.feature.cu124.pypi-dependencies]
+torch = { version = "*", index = "https://download.pytorch.org/whl/cu124" }
 
 [tool.pixi.dependencies]
 python = ">=3.12,<3.14"
@@ -39,7 +46,6 @@ project-excludes = [
     ".pixi",
 ]
 python-version = "3.13"
-python-interpreter-path = ".pixi/envs/default/python.exe"
 
 [tool.ruff]
 target-version = "py313"
@@ -57,4 +63,5 @@ quote-style = "double"
 typecheck = "pyrefly check"
 format = "python -m ruff format ."
 clean-data = "python scripts/clean_mnli.py data/mnli_train.tsv data/mnli_matched.tsv data/mnli_mismatched.tsv"
+test = "python -m unittest discover -s tests -v"
 train = "python -m looped_transformer.main --config config.yaml"

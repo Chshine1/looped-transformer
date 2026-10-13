@@ -17,7 +17,13 @@ from looped_transformer.config.training import (
     require_mapping,
 )
 from looped_transformer.data_reader import MNLIDataReader
-from looped_transformer.modules.loss import LoopedMNLILoss
+from looped_transformer.modules.loss import (
+    AdaptiveJointLoss,
+    DepthWeightedCrossEntropyLoss,
+    LoopedMNLILoss,
+    MeanLoopCrossEntropyLoss,
+    OracleHaltingLoss,
+)
 from looped_transformer.stages.registry import register_stage
 from looped_transformer.types.data import DataSplit
 from looped_transformer.types.train import StageTemplate
@@ -72,24 +78,69 @@ class AdamWOptions:
 class WarmupCosineOptions:
     warmup_ratio: float
     warmup_start_factor: float
-    minimum_learning_rate: float
+    minimum_learning_rate_factor: float
 
     def __post_init__(self) -> None:
         if not 0 <= self.warmup_ratio < 1:
             raise ValueError("warmup_ratio must be in [0, 1)")
         if not 0 < self.warmup_start_factor <= 1:
             raise ValueError("warmup_start_factor must be in (0, 1]")
-        if self.minimum_learning_rate < 0:
-            raise ValueError("minimum_learning_rate must not be negative")
+        if not 0 <= self.minimum_learning_rate_factor <= 1:
+            raise ValueError("minimum_learning_rate_factor must be in [0, 1]")
 
     @classmethod
     def model_validate(cls, value: Any) -> Self:
         raw = require_mapping(value, "warmup cosine options")
         check_keys(
             raw,
-            {"warmup_ratio", "warmup_start_factor", "minimum_learning_rate"},
+            {
+                "warmup_ratio",
+                "warmup_start_factor",
+                "minimum_learning_rate_factor",
+            },
+            {"type"},
         )
+        if raw.get("type", "warmup_cosine") != "warmup_cosine":
+            raise ValueError("Expected scheduler type 'warmup_cosine'")
         return cls(**raw)
+
+
+@dataclass(frozen=True, slots=True)
+class WarmupConstantOptions:
+    warmup_ratio: float
+    warmup_start_factor: float
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.warmup_ratio < 1:
+            raise ValueError("warmup_ratio must be in [0, 1)")
+        if not 0 < self.warmup_start_factor <= 1:
+            raise ValueError("warmup_start_factor must be in (0, 1]")
+
+    @classmethod
+    def model_validate(cls, value: Any) -> Self:
+        raw = require_mapping(value, "warmup constant options")
+        check_keys(raw, {"type", "warmup_ratio", "warmup_start_factor"})
+        if raw["type"] != "warmup_constant":
+            raise ValueError("Expected scheduler type 'warmup_constant'")
+        return cls(
+            warmup_ratio=raw["warmup_ratio"],
+            warmup_start_factor=raw["warmup_start_factor"],
+        )
+
+
+SchedulerOptions = WarmupCosineOptions | WarmupConstantOptions
+
+
+def _load_scheduler_options(value: Any) -> SchedulerOptions:
+    raw = require_mapping(value, "scheduler options")
+    scheduler_type = raw.get("type", "warmup_cosine")
+    if scheduler_type == "warmup_cosine":
+        values = dict(raw)
+        values.pop("type", None)
+        return WarmupCosineOptions.model_validate(values)
+    if scheduler_type == "warmup_constant":
+        return WarmupConstantOptions.model_validate(raw)
+    raise ValueError(f"Unknown scheduler type: {scheduler_type!r}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,8 +165,137 @@ class LoopedMNLILossOptions:
                 "halting_loss_scale",
                 "auxiliary_loss_scale",
             },
+            {"type"},
         )
-        return cls(**raw)
+        if raw.get("type", "ponder") != "ponder":
+            raise ValueError("Expected loss type 'ponder'")
+        return cls(
+            expected_halting_time=raw["expected_halting_time"],
+            halting_loss_scale=raw["halting_loss_scale"],
+            auxiliary_loss_scale=raw["auxiliary_loss_scale"],
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class MeanLoopLossOptions:
+    @classmethod
+    def model_validate(cls, value: Any) -> Self:
+        raw = require_mapping(value, "mean-loop loss options")
+        check_keys(raw, {"type"})
+        if raw["type"] != "mean_loop_cross_entropy":
+            raise ValueError("Expected loss type 'mean_loop_cross_entropy'")
+        return cls()
+
+
+@dataclass(frozen=True, slots=True)
+class DepthWeightedLossOptions:
+    depth_weight_growth: float
+    monotonic_loss_scale: float
+
+    def __post_init__(self) -> None:
+        if self.depth_weight_growth < 0 or self.monotonic_loss_scale < 0:
+            raise ValueError("Depth-loss parameters must not be negative")
+
+    @classmethod
+    def model_validate(cls, value: Any) -> Self:
+        raw = require_mapping(value, "depth-weighted loss options")
+        check_keys(raw, {"type", "depth_weight_growth", "monotonic_loss_scale"})
+        if raw["type"] != "depth_weighted_cross_entropy":
+            raise ValueError("Expected loss type 'depth_weighted_cross_entropy'")
+        return cls(
+            depth_weight_growth=raw["depth_weight_growth"],
+            monotonic_loss_scale=raw["monotonic_loss_scale"],
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class OracleHaltingLossOptions:
+    compute_cost: float
+    target_temperature: float
+
+    def __post_init__(self) -> None:
+        if self.compute_cost < 0:
+            raise ValueError("compute_cost must not be negative")
+        if self.target_temperature <= 0:
+            raise ValueError("target_temperature must be positive")
+
+    @classmethod
+    def model_validate(cls, value: Any) -> Self:
+        raw = require_mapping(value, "oracle-halting loss options")
+        check_keys(raw, {"type", "compute_cost", "target_temperature"})
+        if raw["type"] != "oracle_halting":
+            raise ValueError("Expected loss type 'oracle_halting'")
+        return cls(
+            compute_cost=raw["compute_cost"],
+            target_temperature=raw["target_temperature"],
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AdaptiveJointLossOptions:
+    compute_cost: float
+    target_temperature: float
+    controller_loss_scale: float
+    depth_loss_scale: float
+    depth_weight_growth: float
+    monotonic_loss_scale: float
+
+    def __post_init__(self) -> None:
+        nonnegative = (
+            self.compute_cost,
+            self.controller_loss_scale,
+            self.depth_loss_scale,
+            self.depth_weight_growth,
+            self.monotonic_loss_scale,
+        )
+        if any(value < 0 for value in nonnegative):
+            raise ValueError("Joint-loss scales must not be negative")
+        if self.target_temperature <= 0:
+            raise ValueError("target_temperature must be positive")
+
+    @classmethod
+    def model_validate(cls, value: Any) -> Self:
+        raw = require_mapping(value, "adaptive-joint loss options")
+        keys = {
+            "type",
+            "compute_cost",
+            "target_temperature",
+            "controller_loss_scale",
+            "depth_loss_scale",
+            "depth_weight_growth",
+            "monotonic_loss_scale",
+        }
+        check_keys(raw, keys)
+        if raw["type"] != "adaptive_joint":
+            raise ValueError("Expected loss type 'adaptive_joint'")
+        values = dict(raw)
+        values.pop("type")
+        return cls(**values)
+
+
+LossOptions = (
+    LoopedMNLILossOptions
+    | MeanLoopLossOptions
+    | DepthWeightedLossOptions
+    | OracleHaltingLossOptions
+    | AdaptiveJointLossOptions
+)
+
+
+def _load_loss_options(value: Any) -> LossOptions:
+    raw = require_mapping(value, "loss options")
+    loss_type = raw.get("type", "ponder")
+    option_types = {
+        "ponder": LoopedMNLILossOptions,
+        "mean_loop_cross_entropy": MeanLoopLossOptions,
+        "depth_weighted_cross_entropy": DepthWeightedLossOptions,
+        "oracle_halting": OracleHaltingLossOptions,
+        "adaptive_joint": AdaptiveJointLossOptions,
+    }
+    options_type = option_types.get(loss_type)
+    if options_type is None:
+        raise ValueError(f"Unknown loss type: {loss_type!r}")
+    return options_type.model_validate(raw)
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,8 +304,8 @@ class LoopedMNLIStageOptions(StageOptions):
 
     common: CommonStageOptions
     optimizer: AdamWOptions
-    scheduler: WarmupCosineOptions
-    loss: LoopedMNLILossOptions
+    scheduler: SchedulerOptions
+    loss: LossOptions
     type: str = field(init=False, default=stage_type)
 
     @classmethod
@@ -137,8 +317,8 @@ class LoopedMNLIStageOptions(StageOptions):
         return cls(
             common=CommonStageOptions.model_validate(raw["common"]),
             optimizer=AdamWOptions.model_validate(raw["optimizer"]),
-            scheduler=WarmupCosineOptions.model_validate(raw["scheduler"]),
-            loss=LoopedMNLILossOptions.model_validate(raw["loss"]),
+            scheduler=_load_scheduler_options(raw["scheduler"]),
+            loss=_load_loss_options(raw["loss"]),
         )
 
 
@@ -177,25 +357,37 @@ def _build_stage_template(
             end_factor=1.0,
             total_iters=warmup_steps,
         )
-        cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=max(1, total_steps - warmup_steps),
-            eta_min=scheduler.minimum_learning_rate,
-        )
+        if isinstance(scheduler, WarmupCosineOptions):
+            cosine_steps = max(1, total_steps - warmup_steps)
+            minimum_factor = scheduler.minimum_learning_rate_factor
+
+            def cosine_factor(step: int) -> float:
+                progress = min(step, cosine_steps) / cosine_steps
+                return (
+                    minimum_factor
+                    + (1 - minimum_factor) * (1 + math.cos(math.pi * progress)) / 2
+                )
+
+            after_warmup = torch.optim.lr_scheduler.LambdaLR(
+                optimizer, lr_lambda=cosine_factor
+            )
+        else:
+            after_warmup = torch.optim.lr_scheduler.ConstantLR(
+                optimizer,
+                factor=1.0,
+                total_iters=max(1, total_steps - warmup_steps),
+            )
         return torch.optim.lr_scheduler.SequentialLR(
-            optimizer, [warmup, cosine], [warmup_steps]
+            optimizer, [warmup, after_warmup], [warmup_steps]
         )
 
     common = options.common
     return StageTemplate(
         id=template_id,
         data_reader=data_reader,
-        loss=LoopedMNLILoss(
-            expected_time=options.loss.expected_halting_time,
-            halt_scale=options.loss.halting_loss_scale,
-            aux_scale=options.loss.auxiliary_loss_scale,
-        ),
+        loss=_build_loss(options.loss),
         frozen_patterns=common.frozen_patterns,
+        evaluation_patterns=common.evaluation_patterns,
         optimizer_factory=get_optimizer,
         scheduler_factory=get_scheduler,
         epochs=common.epochs,
@@ -203,6 +395,37 @@ def _build_stage_template(
         gradient_accumulation_steps=common.gradient_accumulation_steps,
         save_every_epochs=common.save_every_epochs,
     )
+
+
+def _build_loss(options: LossOptions) -> nn.Module:
+    if isinstance(options, LoopedMNLILossOptions):
+        return LoopedMNLILoss(
+            expected_time=options.expected_halting_time,
+            halt_scale=options.halting_loss_scale,
+            aux_scale=options.auxiliary_loss_scale,
+        )
+    if isinstance(options, MeanLoopLossOptions):
+        return MeanLoopCrossEntropyLoss()
+    if isinstance(options, DepthWeightedLossOptions):
+        return DepthWeightedCrossEntropyLoss(
+            depth_weight_growth=options.depth_weight_growth,
+            monotonic_loss_scale=options.monotonic_loss_scale,
+        )
+    if isinstance(options, OracleHaltingLossOptions):
+        return OracleHaltingLoss(
+            compute_cost=options.compute_cost,
+            target_temperature=options.target_temperature,
+        )
+    if isinstance(options, AdaptiveJointLossOptions):
+        return AdaptiveJointLoss(
+            compute_cost=options.compute_cost,
+            target_temperature=options.target_temperature,
+            controller_loss_scale=options.controller_loss_scale,
+            depth_loss_scale=options.depth_loss_scale,
+            depth_weight_growth=options.depth_weight_growth,
+            monotonic_loss_scale=options.monotonic_loss_scale,
+        )
+    raise TypeError(f"Unsupported loss options: {type(options).__name__}")
 
 
 def _get_parameter_groups(
@@ -214,7 +437,7 @@ def _get_parameter_groups(
         (re.compile(module_pattern), learning_rate)
         for module_pattern, learning_rate in options.learning_rates.items()
     ]
-    groups: dict[float, list[nn.parameter.Parameter]] = {}
+    groups: dict[tuple[float, float], list[nn.parameter.Parameter]] = {}
     unmatched_modules: set[str] = set()
 
     for parameter_name, parameter in named_parameters:
@@ -230,7 +453,8 @@ def _get_parameter_groups(
         if learning_rate is None:
             unmatched_modules.add(module_name or "<root>")
             continue
-        groups.setdefault(learning_rate, []).append(parameter)
+        weight_decay = options.weight_decay if parameter.ndim >= 2 else 0.0
+        groups.setdefault((learning_rate, weight_decay), []).append(parameter)
 
     if unmatched_modules:
         names = ", ".join(sorted(unmatched_modules))
@@ -239,8 +463,12 @@ def _get_parameter_groups(
         raise ValueError("The stage has no trainable parameters")
 
     return [
-        {"params": parameters, "lr": learning_rate}
-        for learning_rate, parameters in groups.items()
+        {
+            "params": parameters,
+            "lr": learning_rate,
+            "weight_decay": weight_decay,
+        }
+        for (learning_rate, weight_decay), parameters in groups.items()
     ]
 
 
