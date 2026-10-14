@@ -21,7 +21,7 @@ from looped_transformer.modules.loss import (
     AdaptiveJointLoss,
     DepthWeightedCrossEntropyLoss,
     LoopedMNLILoss,
-    MeanLoopCrossEntropyLoss,
+    LastLoopCrossEntropyLoss,
     OracleHaltingLoss,
 )
 from looped_transformer.stages.registry import register_stage
@@ -177,13 +177,13 @@ class LoopedMNLILossOptions:
 
 
 @dataclass(frozen=True, slots=True)
-class MeanLoopLossOptions:
+class LastLoopLossOptions:
     @classmethod
     def model_validate(cls, value: Any) -> Self:
-        raw = require_mapping(value, "mean-loop loss options")
+        raw = require_mapping(value, "last-loop loss options")
         check_keys(raw, {"type"})
-        if raw["type"] != "mean_loop_cross_entropy":
-            raise ValueError("Expected loss type 'mean_loop_cross_entropy'")
+        if raw["type"] != "last_loop_cross_entropy":
+            raise ValueError("Expected loss type 'last_loop_cross_entropy'")
         return cls()
 
 
@@ -274,11 +274,11 @@ class AdaptiveJointLossOptions:
 
 
 LossOptions = (
-    LoopedMNLILossOptions
-    | MeanLoopLossOptions
-    | DepthWeightedLossOptions
-    | OracleHaltingLossOptions
-    | AdaptiveJointLossOptions
+        LoopedMNLILossOptions
+        | LastLoopLossOptions
+        | DepthWeightedLossOptions
+        | OracleHaltingLossOptions
+        | AdaptiveJointLossOptions
 )
 
 
@@ -287,7 +287,7 @@ def _load_loss_options(value: Any) -> LossOptions:
     loss_type = raw.get("type", "ponder")
     option_types = {
         "ponder": LoopedMNLILossOptions,
-        "mean_loop_cross_entropy": MeanLoopLossOptions,
+        "last_loop_cross_entropy": LastLoopLossOptions,
         "depth_weighted_cross_entropy": DepthWeightedLossOptions,
         "oracle_halting": OracleHaltingLossOptions,
         "adaptive_joint": AdaptiveJointLossOptions,
@@ -404,8 +404,8 @@ def _build_loss(options: LossOptions) -> nn.Module:
             halt_scale=options.halting_loss_scale,
             aux_scale=options.auxiliary_loss_scale,
         )
-    if isinstance(options, MeanLoopLossOptions):
-        return MeanLoopCrossEntropyLoss()
+    if isinstance(options, LastLoopLossOptions):
+        return LastLoopCrossEntropyLoss()
     if isinstance(options, DepthWeightedLossOptions):
         return DepthWeightedCrossEntropyLoss(
             depth_weight_growth=options.depth_weight_growth,

@@ -65,11 +65,11 @@ def _distribution_cross_entropy(target: Tensor, probabilities: Tensor) -> Tensor
     return -(target * torch.log(probabilities.float().clamp_min(1e-8))).sum(0).mean()
 
 
-class MeanLoopCrossEntropyLoss(nn.Module):
+class LastLoopCrossEntropyLoss(nn.Module):
     """Give every recurrent depth the same direct classification objective."""
 
     def forward(self, output: ModelTrainOutput, labels: Tensor) -> Tensor:
-        return _cross_entropy_by_time(output, labels).mean()
+        return _cross_entropy_by_time(output, labels)[-1].mean()
 
 
 class DepthWeightedCrossEntropyLoss(nn.Module):

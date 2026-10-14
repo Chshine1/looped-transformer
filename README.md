@@ -30,11 +30,6 @@ The reference iteration count is a fixed configuration value, not an estimate
 from the controller. Static mode has no trainable gamma. The historical geometric
 mode remains available for old checkpoints.
 
-The internal state is advanced by a fixed rotary time step after every loop.
-The exposed state is transformed back from its cumulative loop phase before
-classification and halting. See [Architecture](docs/architecture.md) for the
-complete equations.
-
 ## Reproducibility
 
 The project uses `pixi` and Python 3.12 or newer.
@@ -44,11 +39,6 @@ pixi run test
 pixi run typecheck
 pixi run train
 ```
-
-Training expects cleaned MNLI files at the paths specified in `config.yaml`.
-The default configuration executes only four epochs of backbone warmup, with
-mean-loop CE and a frozen controller. Later-stage templates remain available but
-are not scheduled. See [the static warmup experiment](docs/static_warmup.md).
 
 ## Scope
 

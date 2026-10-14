@@ -9,7 +9,6 @@ from looped_transformer.config.model import (
     EvaluationOptions,
     HaltingOptions,
     ModelOptions,
-    ResidualScalingOptions,
     TransformerOptions,
 )
 from looped_transformer.config.runtime import RuntimeOptions
@@ -44,8 +43,5 @@ def load_options(path: str | Path) -> AppOptions:
             halting=HaltingOptions(**model_options["halting"]),
             training=TrainingOptions.model_validate(model_options["training"]),
             evaluation=EvaluationOptions(**model_options["evaluation"]),
-            residual_scaling=ResidualScalingOptions(
-                **model_options.get("residual_scaling", {})
-            ),
         ),
     )

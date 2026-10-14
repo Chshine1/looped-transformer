@@ -1,9 +1,7 @@
 import math
-
 import torch
 import torch.nn as nn
 from torch import Tensor
-from torch.nn import functional
 
 from looped_transformer.config.model import ModelOptions
 from looped_transformer.modules.halting_cell import HaltingCell, HaltingResult
@@ -33,23 +31,6 @@ class LoopedMNLI(nn.Module):
                 "Tokenizer vocabulary metadata must be resolved before model creation"
             )
 
-        scaling = model_options.residual_scaling
-        expected_iterations = (
-            scaling.expected_iterations or model_options.max_iterations
-        )
-        if not 1 <= expected_iterations <= model_options.max_iterations:
-            raise ValueError("expected_iterations must be within [1, max_iterations]")
-        self._static_residual_scale = scaling.multiplier / (
-            expected_iterations * math.sqrt(self.UNIQUE_TRANSFORMER_BLOCKS)
-        )
-        self._log_gamma_logit: nn.Parameter | None = None
-        if scaling.mode == "geometric":
-            gamma = model_options.halting.residue_time_scaling
-            if not 0 < gamma < 1:
-                raise ValueError("legacy residue_time_scaling must be in (0, 1)")
-            self._log_gamma_logit = nn.Parameter(
-                torch.tensor(math.log(gamma / (1 - gamma)))
-            )
         self._loop_normalization = nn.RMSNorm(dim)
 
         self._token_embedding = nn.Embedding(
@@ -94,17 +75,6 @@ class LoopedMNLI(nn.Module):
         sin = torch.sin(frequencies)
         return cos, sin
 
-    def residual_scale(self, iteration: int) -> Tensor:
-        """Per-branch coefficient; the static budget never depends on halting."""
-        if self._log_gamma_logit is None:
-            return self._token_embedding.weight.new_tensor(self._static_residual_scale)
-        return torch.exp(iteration * functional.logsigmoid(self._log_gamma_logit)) / 2
-
-    def injection_scale(self, iteration: int) -> Tensor:
-        if self._model_options.residual_scaling.mode == "static":
-            return self.residual_scale(iteration)
-        return self._token_embedding.weight.new_tensor(1.0)
-
     def forward(self, input_ids: Tensor, padding_mask: Tensor) -> ModelForwardOutput:
         dimension = self._model_options.hidden_state_dimension
         batch_size, seq_length = input_ids.shape
@@ -129,16 +99,14 @@ class LoopedMNLI(nn.Module):
         )
         batches_halted = torch.zeros(batch_size, device=h.device, dtype=torch.bool)
 
+        injection_scale = 1.0 / self._model_options.max_iterations
+        transformer_scale = injection_scale / math.sqrt(2)
         for t in range(self._model_options.max_iterations):
-            scale = self.residual_scale(t)
-
             if t > 0:
-                h = h + self.injection_scale(
-                    t
-                ) * self._injection_gate * self._input_injection(h, h0, padding_mask)
+                h = h + injection_scale * self._input_injection(h, h0, padding_mask)
 
-            h = self._transformer_block1(h, padding_mask, scale)
-            h = self._transformer_block2(h, padding_mask, scale)
+            h = self._transformer_block1(h, padding_mask, transformer_scale)
+            h = self._transformer_block2(h, padding_mask, transformer_scale)
             h = self._loop_normalization(h)
 
             h1, h2 = h.chunk(2, dim=-1)
