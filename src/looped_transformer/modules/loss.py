@@ -68,8 +68,16 @@ def _distribution_cross_entropy(target: Tensor, probabilities: Tensor) -> Tensor
 class LastLoopCrossEntropyLoss(nn.Module):
     """Give every recurrent depth the same direct classification objective."""
 
+    def __init__(self, mean_all_loops: bool):
+        super().__init__()
+        self._mean_all_loops = mean_all_loops
+
     def forward(self, output: ModelTrainOutput, labels: Tensor) -> Tensor:
-        return _cross_entropy_by_time(output, labels)[-1].mean()
+        return (
+            _cross_entropy_by_time(output, labels).mean()
+            if self._mean_all_loops
+            else _cross_entropy_by_time(output, labels)[-1].mean()
+        )
 
 
 class DepthWeightedCrossEntropyLoss(nn.Module):

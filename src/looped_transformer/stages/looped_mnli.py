@@ -178,13 +178,15 @@ class LoopedMNLILossOptions:
 
 @dataclass(frozen=True, slots=True)
 class LastLoopLossOptions:
+    mean_all_loops: bool
+
     @classmethod
     def model_validate(cls, value: Any) -> Self:
         raw = require_mapping(value, "last-loop loss options")
-        check_keys(raw, {"type"})
+        check_keys(raw, {"type", "mean_all_loops"})
         if raw["type"] != "last_loop_cross_entropy":
             raise ValueError("Expected loss type 'last_loop_cross_entropy'")
-        return cls()
+        return cls(mean_all_loops=raw["mean_all_loops"])
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,11 +276,11 @@ class AdaptiveJointLossOptions:
 
 
 LossOptions = (
-        LoopedMNLILossOptions
-        | LastLoopLossOptions
-        | DepthWeightedLossOptions
-        | OracleHaltingLossOptions
-        | AdaptiveJointLossOptions
+    LoopedMNLILossOptions
+    | LastLoopLossOptions
+    | DepthWeightedLossOptions
+    | OracleHaltingLossOptions
+    | AdaptiveJointLossOptions
 )
 
 
@@ -405,7 +407,7 @@ def _build_loss(options: LossOptions) -> nn.Module:
             aux_scale=options.auxiliary_loss_scale,
         )
     if isinstance(options, LastLoopLossOptions):
-        return LastLoopCrossEntropyLoss()
+        return LastLoopCrossEntropyLoss(options.mean_all_loops)
     if isinstance(options, DepthWeightedLossOptions):
         return DepthWeightedCrossEntropyLoss(
             depth_weight_growth=options.depth_weight_growth,

@@ -41,7 +41,7 @@ model:
       backbone_warmup:
         type: looped_mnli
         common:
-          epochs: 16
+          epochs: 6
           frozen_patterns: '^_halting_cell\.'
           evaluation_patterns: '^_halting_cell(?:\.|$)'
           max_gradient_norm: 1.0
@@ -50,10 +50,10 @@ model:
         optimizer:
           learning_rates:
             '^$': 0.001
-            '_loop_normalization': 0.0005
+            '_loop\._loop_normalization': 0.0005
             '_token_embedding': 0.0005
-            '_input_injection(?:\..*)?': 0.0005
-            '_transformer_block[12](?:\..*)?': 0.0005
+            '_loop\._input_injection(?:\..*)?': 0.0005
+            '_loop\._transformer_block[12](?:\..*)?': 0.0005
             '_classify_normalization': 0.0005
             '_classifier': 0.0005
           weight_decay: 0.01
@@ -67,6 +67,7 @@ model:
           minimum_learning_rate_factor: 0.1
         loss:
           type: last_loop_cross_entropy
+          mean_all_loops: true
       depth_training:
         type: looped_mnli
         common:
@@ -79,10 +80,10 @@ model:
         optimizer:
           learning_rates:
             '^$': 0.0003
-            '_loop_normalization': 0.0002
+            '_loop\._loop_normalization': 0.0002
             '_token_embedding': 0.0002
-            '_input_injection(?:\..*)?': 0.0002
-            '_transformer_block[12](?:\..*)?': 0.0002
+            '_loop\._input_injection(?:\..*)?': 0.0002
+            '_loop\._transformer_block[12](?:\..*)?': 0.0002
             '_classify_normalization': 0.0002
             '_classifier': 0.0002
           weight_decay: 0.01
@@ -134,11 +135,11 @@ model:
         optimizer:
           learning_rates:
             '_halting_cell(?:\..*)?': 0.0002
-            '_input_injection(?:\..*)?': 0.0001
+            '_loop\._input_injection(?:\..*)?': 0.0001
             '^$': 0.0001
-            '_loop_normalization': 0.00005
+            '_loop\._loop_normalization': 0.00005
             '_token_embedding': 0.00005
-            '_transformer_block[12](?:\..*)?': 0.00005
+            '_loop\._transformer_block[12](?:\..*)?': 0.00005
             '_classify_normalization': 0.00005
             '_classifier': 0.00005
           weight_decay: 0.01

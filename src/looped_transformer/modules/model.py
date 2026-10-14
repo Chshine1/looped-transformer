@@ -14,6 +14,53 @@ from looped_transformer.types.tokenizer import TokenizerInfo
 class LoopedMNLI(nn.Module):
     UNIQUE_TRANSFORMER_BLOCKS = 2
 
+    class _Loop(nn.Module):
+        def __init__(self, model_options: ModelOptions):
+            super().__init__()
+
+            dim = model_options.hidden_state_dimension
+            ffn_dim = model_options.transformer.swi_glu_ffn_dimension
+            heads_count = model_options.transformer.attention_heads_count
+            max_seq_length = model_options.max_sequence_length
+            dropout = model_options.dropout
+
+            self._input_injection = RoPEMultiHeadAttention(
+                dim, heads_count, max_seq_length, dropout
+            )
+            self._transformer_block1 = SwiGLUTransformerBlock(
+                dim, ffn_dim, heads_count, max_seq_length, dropout
+            )
+            self._transformer_block2 = SwiGLUTransformerBlock(
+                dim, ffn_dim, heads_count, max_seq_length, dropout
+            )
+            self._loop_normalization = nn.RMSNorm(dim)
+
+            self._injection_scale = 1.0 / model_options.max_iterations
+            self._transformer_scale = self._injection_scale / math.sqrt(2)
+
+        def forward(
+            self,
+            t: int,
+            h0: Tensor,
+            h: Tensor,
+            padding_mask: Tensor,
+            cos: Tensor,
+            sin: Tensor,
+        ) -> Tensor:
+            if t > 0:
+                h = h + self._injection_scale * self._input_injection(
+                    h, h0, padding_mask
+                )
+
+            h = self._transformer_block1(h, padding_mask, self._transformer_scale)
+            h = self._transformer_block2(h, padding_mask, self._transformer_scale)
+            h = self._loop_normalization(h)
+
+            h1, h2 = h.chunk(2, dim=-1)
+            return torch.cat(
+                [h1 * cos[0] - h2 * sin[0], h2 * cos[0] + h1 * sin[0]], dim=-1
+            )
+
     def __init__(
         self,
         model_options: ModelOptions,
@@ -24,14 +71,12 @@ class LoopedMNLI(nn.Module):
 
         dim = model_options.hidden_state_dimension
         dropout = model_options.dropout
-        heads_count = model_options.transformer.attention_heads_count
-        ffn_dim = model_options.transformer.swi_glu_ffn_dimension
-        if tokenizer_info.vocab_size is None or tokenizer_info.pad_token_id is None:
-            raise ValueError(
-                "Tokenizer vocabulary metadata must be resolved before model creation"
-            )
 
-        self._loop_normalization = nn.RMSNorm(dim)
+        loop_rope_cos, loop_rope_sin = self._compute_rope_transformations(
+            dim, model_options.max_iterations
+        )
+        self.register_buffer("_loop_rope_cos", loop_rope_cos, persistent=False)
+        self.register_buffer("_loop_rope_sin", loop_rope_sin, persistent=False)
 
         self._token_embedding = nn.Embedding(
             tokenizer_info.vocab_size,
@@ -40,29 +85,12 @@ class LoopedMNLI(nn.Module):
         )
         self._dropout = nn.Dropout(dropout)
 
-        max_seq_length = model_options.max_sequence_length
-        self._input_injection = RoPEMultiHeadAttention(
-            dim, heads_count, max_seq_length, dropout
-        )
-        self._injection_gate = nn.Parameter(torch.zeros(dim))
-
-        self._transformer_block1 = SwiGLUTransformerBlock(
-            dim, ffn_dim, heads_count, max_seq_length, dropout
-        )
-        self._transformer_block2 = SwiGLUTransformerBlock(
-            dim, ffn_dim, heads_count, max_seq_length, dropout
-        )
+        self._loop = self._Loop(model_options)
 
         self._halting_cell = HaltingCell(model_options)
 
         self._classify_normalization = nn.RMSNorm(dim)
         self._classifier = nn.Linear(dim, model_options.output_classes_count)
-
-        loop_rope_cos, loop_rope_sin = self._compute_rope_transformations(
-            dim, model_options.max_iterations
-        )
-        self.register_buffer("_loop_rope_cos", loop_rope_cos, persistent=False)
-        self.register_buffer("_loop_rope_sin", loop_rope_sin, persistent=False)
 
     @staticmethod
     def _compute_rope_transformations(model_dimension: int, max_iterations: int):
@@ -99,33 +127,22 @@ class LoopedMNLI(nn.Module):
         )
         batches_halted = torch.zeros(batch_size, device=h.device, dtype=torch.bool)
 
-        injection_scale = 1.0 / self._model_options.max_iterations
-        transformer_scale = injection_scale / math.sqrt(2)
         for t in range(self._model_options.max_iterations):
-            if t > 0:
-                h = h + injection_scale * self._input_injection(h, h0, padding_mask)
-
-            h = self._transformer_block1(h, padding_mask, transformer_scale)
-            h = self._transformer_block2(h, padding_mask, transformer_scale)
-            h = self._loop_normalization(h)
+            h = self._loop(t, h0, h, padding_mask, cos, sin)
 
             h1, h2 = h.chunk(2, dim=-1)
-            h = torch.cat(
-                [h1 * cos[0] - h2 * sin[0], h2 * cos[0] + h1 * sin[0]], dim=-1
-            )
-
-            output = torch.cat(
+            aligned_hidden_state = torch.cat(
                 [h1 * cos[t] + h2 * sin[t], h2 * cos[t] - h1 * sin[t]], dim=-1
             )
 
-            mask = padding_mask.unsqueeze(-1).to(output.dtype)
-            pooled = (output * mask).sum(1) / mask.sum(1).clamp(min=1)
+            mask = padding_mask.unsqueeze(-1).to(aligned_hidden_state.dtype)
+            pooled = (aligned_hidden_state * mask).sum(1) / mask.sum(1).clamp(min=1)
             logits = self._classifier(self._classify_normalization(pooled))
 
             logits_list.append(logits)
 
             halting_result: HaltingResult = self._halting_cell(
-                t, output.detach(), halting_hidden_state, padding_mask
+                t, aligned_hidden_state.detach(), halting_hidden_state, padding_mask
             )
             halting_hidden_state = halting_result["hidden_state"]
 
