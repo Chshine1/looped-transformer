@@ -38,26 +38,19 @@ class RoPEMultiHeadAttention(nn.Module):
 
     def _apply_rope(self, x: Tensor) -> Tensor:
         seq_length = x.size(2)
-        if seq_length > self._rope_cache.cos.size(0):
-            raise ValueError(
-                f"Sequence length {seq_length} exceeds the configured maximum "
-                f"{self._rope_cache.cos.size(0)}"
-            )
-
         x1, x2 = x.chunk(2, dim=-1)
-        cos = self._rope_cache.cos[:seq_length].to(dtype=x.dtype)
-        sin = self._rope_cache.sin[:seq_length].to(dtype=x.dtype)
-        return torch.cat([x1 * cos - x2 * sin, x2 * cos + x1 * sin], dim=-1)
+        complex_x = torch.complex(x1, x2) * self._rope_cache.rotations[:seq_length]
+        return torch.cat([complex_x.real, complex_x.imag], dim=-1)
 
     def forward(
-        self, query_seq: Tensor, key_value_seq: Tensor, attention_mask: Tensor | None
+        self, query_seq: Tensor, key_value_seq: Tensor, attention_mask: Tensor
     ) -> Tensor:
         batch, q_seq_length, _ = query_seq.shape
         kv_seq_length = key_value_seq.shape[1]
 
-        q: Tensor = self._q_proj(query_seq)  # (batch, q_seq_length, feature)
-        k: Tensor = self._k_proj(key_value_seq)  # (batch, kv_seq_length, feature)
-        v: Tensor = self._v_proj(key_value_seq)  # (batch, kv_seq_length, feature)
+        q: Tensor = self._q_proj(query_seq)
+        k: Tensor = self._k_proj(key_value_seq)
+        v: Tensor = self._v_proj(key_value_seq)
 
         q = q.reshape(batch, q_seq_length, self._n_heads, self._d_head).transpose(1, 2)
         k = k.reshape(batch, kv_seq_length, self._n_heads, self._d_head).transpose(1, 2)
@@ -67,16 +60,13 @@ class RoPEMultiHeadAttention(nn.Module):
         k = self._apply_rope(k)
 
         scores = q @ k.transpose(2, 3) / self._sqrt_d_head
+        scores = scores.masked_fill_(
+            (attention_mask == 0)[:, None, None, :], torch.finfo(scores.dtype).min
+        )
 
-        if attention_mask is not None:
-            key_mask = attention_mask == 0
-            scores = scores.masked_fill_(
-                key_mask[:, None, None, :], torch.finfo(scores.dtype).min
-            )
-
-        attention = functional.softmax(scores, dim=3)
+        attention = functional.softmax(scores, dim=-1)
         attention = self._dropout(attention)
 
-        out = attention @ v
-        out = out.transpose(1, 2).contiguous().view(batch, q_seq_length, self._d_model)
+        out: Tensor = attention @ v
+        out = out.transpose(1, 2).reshape(batch, q_seq_length, self._d_model)
         return self._out_proj(out)

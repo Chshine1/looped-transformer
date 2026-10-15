@@ -1,17 +1,18 @@
-from looped_transformer.utils.shared_cache import TimedMultiHeadRoPECache
-from looped_transformer.utils.shared_cache import PositionalRoPECache
 import math
+
 import torch
 import torch.nn as nn
 from torch import Tensor
 
 from looped_transformer.config.model import ModelOptions
+from looped_transformer.modules.attn_res import AttnRes
 from looped_transformer.modules.halting_cell import HaltingCell, HaltingResult
 from looped_transformer.modules.masked_mean_pooling import MaskedMeanPooling
-from looped_transformer.modules.multi_head_attention import RoPEMultiHeadAttention
 from looped_transformer.modules.swi_glu_transformer_block import SwiGLUTransformerBlock
 from looped_transformer.types.model import ModelForwardOutput
 from looped_transformer.types.tokenizer import TokenizerInfo
+from looped_transformer.utils.shared_cache import PositionalRoPECache
+from looped_transformer.utils.shared_cache import TimedMultiHeadRoPECache
 
 
 class LoopedMNLI(nn.Module):
@@ -68,10 +69,6 @@ class LoopedMNLI(nn.Module):
             heads_count = model_options.transformer.attention_heads_count
             dropout = model_options.dropout
 
-            self._input_injection = RoPEMultiHeadAttention(
-                positional_rope_cache, dim, heads_count, dropout
-            )
-
             self._transformer_block1 = SwiGLUTransformerBlock(
                 positional_rope_cache, dim, ffn_dim, heads_count, dropout
             )
@@ -83,21 +80,15 @@ class LoopedMNLI(nn.Module):
                 timed_rope_cache, model_options
             )
 
-            self._injection_scale = 1.0 / model_options.max_iterations
-            self._transformer_scale = self._injection_scale / math.sqrt(2)
+            self._transformer_scale = (1.0 / model_options.max_iterations) / math.sqrt(
+                2
+            )
 
         def forward(
             self,
-            t: int,
-            h0: Tensor,
             h: Tensor,
             padding_mask: Tensor,
         ) -> Tensor:
-            if t > 0:
-                h = h + self._injection_scale * self._input_injection(
-                    h, h0, padding_mask
-                )
-
             h = self._transformer_block1(h, padding_mask, self._transformer_scale)
             h = self._transformer_block2(h, padding_mask, self._transformer_scale)
             h = self._loop_normalization(h)
@@ -130,6 +121,13 @@ class LoopedMNLI(nn.Module):
         )
         self._dropout = nn.Dropout(dropout)
 
+        self._attn_res = AttnRes(
+            self._positional_rope,
+            dim,
+            heads_count,
+            model_options.max_iterations,
+            dropout,
+        )
         self._loop = self._Loop(self._positional_rope, self._timed_rope, model_options)
 
         self._alignment_rotation = self._MultiHeadRotation(
@@ -147,7 +145,8 @@ class LoopedMNLI(nn.Module):
         batch_size, seq_length = input_ids.shape
 
         h0: Tensor = self._token_embedding(input_ids)
-        h: Tensor = self._dropout(h0)
+        h: Tensor = h0
+        history_states: list[Tensor] = [h0]
 
         logits_list: list[Tensor] = []
         hazards_list: list[Tensor] = []
@@ -163,8 +162,12 @@ class LoopedMNLI(nn.Module):
         )
         batches_halted = torch.zeros(batch_size, device=h.device, dtype=torch.bool)
 
+        injection_scale = 1.0 / self._model_options.max_iterations
+
         for t in range(self._model_options.max_iterations):
-            h = self._loop(t, h0, h, padding_mask)
+            attn_res: Tensor = self._attn_res(h, history_states[:-1], padding_mask)
+            h = h + injection_scale * attn_res
+            h = self._loop(h, padding_mask)
 
             aligned = self._alignment_rotation(-(t + 1), h)
             pooled = self._mean_pooling(aligned, padding_mask)
