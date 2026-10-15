@@ -1,5 +1,6 @@
 import re
 import unittest
+import warnings
 from dataclasses import replace
 from pathlib import Path
 
@@ -16,9 +17,64 @@ from looped_transformer.stages.looped_mnli import (
     _get_parameter_groups,
 )
 from looped_transformer.types.tokenizer import TokenizerInfo
+from looped_transformer.utils.shared_cache import apply_rotary
 
 
 class ArchitectureTrainingTests(unittest.TestCase):
+    def test_real_rope_matches_complex_reference_and_gradients(self):
+        for dtype in (torch.float16, torch.bfloat16, torch.float32, torch.float64):
+            with self.subTest(dtype=dtype):
+                x = torch.randn(2, 3, 8, dtype=dtype, requires_grad=True)
+                angle = torch.randn(3, 4)
+                real, imag = x.double().chunk(2, dim=-1)
+                reference = torch.complex(real, imag) * torch.complex(
+                    angle.cos().double(), angle.sin().double()
+                )
+                expected = torch.cat([reference.real, reference.imag], -1).to(dtype)
+                actual = apply_rotary(x, angle.cos(), angle.sin())
+                self.assertEqual(actual.dtype, dtype)
+                torch.testing.assert_close(actual, expected)
+                actual.square().sum().backward()
+                self.assertTrue(torch.isfinite(x.grad).all())
+
+    def test_model_dtype_conversion_preserves_rotation(self):
+        for dtype in (torch.float32, torch.float64, torch.float16, torch.bfloat16):
+            with self.subTest(dtype=dtype), warnings.catch_warnings():
+                warnings.simplefilter("error")
+                self.model.to(dtype=dtype)
+                self.assertTrue(all(not b.is_complex() for b in self.model.buffers()))
+                self.assertGreater(self.model._timed_rope.sine.abs().sum().item(), 0)
+                x = torch.randn(2, 4, 8, dtype=dtype)
+                rotated = self.model._alignment_rotation(2, x)
+                restored = self.model._alignment_rotation(-2, rotated)
+                tolerance = 0.02 if dtype == torch.bfloat16 else 0.002
+                torch.testing.assert_close(restored, x, atol=tolerance, rtol=tolerance)
+
+    def test_mixed_precision_training(self):
+        cases = [("cpu", torch.bfloat16)]
+        if torch.cuda.is_available():
+            cases.append(("cuda", torch.float16))
+            if torch.cuda.is_bf16_supported():
+                cases.append(("cuda", torch.bfloat16))
+        for device, dtype in cases:
+            with self.subTest(device=device, dtype=dtype), warnings.catch_warnings():
+                warnings.simplefilter("error")
+                self.model.to(device=device, dtype=torch.float32)
+                self.model.zero_grad(set_to_none=True)
+                with torch.autocast(device, dtype=dtype):
+                    output = self.model(
+                        torch.ones(2, 4, device=device, dtype=torch.long),
+                        torch.ones(2, 4, device=device),
+                    )
+                    loss = LastLoopCrossEntropyLoss(False, 0.01)(
+                        output, torch.tensor([0, 2], device=device)
+                    )
+                loss.backward()
+                self.assertTrue(torch.isfinite(loss))
+                for parameter in self.model.parameters():
+                    if parameter.grad is not None:
+                        self.assertTrue(torch.isfinite(parameter.grad).all())
+
     def setUp(self):
         torch.manual_seed(42)
         options = load_options(Path(__file__).resolve().parents[1] / "config.yaml")

@@ -5,7 +5,7 @@ from torch import Tensor, nn
 from torch.nn import functional
 
 from looped_transformer.modules.residual_scale import ResidualScale
-from looped_transformer.utils.shared_cache import PositionalRoPECache
+from looped_transformer.utils.shared_cache import PositionalRoPECache, apply_rotary
 
 
 class AttnRes(nn.Module):
@@ -64,9 +64,9 @@ class AttnRes(nn.Module):
         return torch.stack(penalties).mean()
 
     def _apply_rope(self, x: Tensor, seq_length: int) -> Tensor:
-        x1, x2 = x.chunk(2, dim=-1)
-        complex_x = torch.complex(x1, x2) * self._rope_cache.rotations[:seq_length]
-        return torch.cat([complex_x.real, complex_x.imag], dim=-1)
+        return apply_rotary(
+            x, self._rope_cache.cosine[:seq_length], self._rope_cache.sine[:seq_length]
+        )
 
     def forward(
         self,

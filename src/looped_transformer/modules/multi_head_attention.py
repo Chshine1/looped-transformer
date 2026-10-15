@@ -1,10 +1,11 @@
-from looped_transformer.utils.shared_cache import PositionalRoPECache
 import math
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as functional
 from torch import Tensor
+
+from looped_transformer.utils.shared_cache import PositionalRoPECache, apply_rotary
 
 
 class RoPEMultiHeadAttention(nn.Module):
@@ -38,9 +39,9 @@ class RoPEMultiHeadAttention(nn.Module):
 
     def _apply_rope(self, x: Tensor) -> Tensor:
         seq_length = x.size(2)
-        x1, x2 = x.chunk(2, dim=-1)
-        complex_x = torch.complex(x1, x2) * self._rope_cache.rotations[:seq_length]
-        return torch.cat([complex_x.real, complex_x.imag], dim=-1)
+        return apply_rotary(
+            x, self._rope_cache.cosine[:seq_length], self._rope_cache.sine[:seq_length]
+        )
 
     def forward(
         self, query_seq: Tensor, key_value_seq: Tensor, attention_mask: Tensor

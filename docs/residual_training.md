@@ -1,5 +1,25 @@
 # Residual scaling and warmup regularization
 
+## RoPE precision
+
+Both positional and time RoPE store separate real cosine/sine buffers.
+The rotation `(a*cos - b*sin, a*sin + b*cos)` is mathematically equivalent
+to complex multiplication without complex dtype restrictions. In particular,
+`model.to(dtype=float32)` cannot discard the sine component anymore.
+Rotation arithmetic runs outside autocast in float32 (float64 for double
+activations), then returns the input dtype. Under normal AMP usage, model
+parameters and caches stay float32. Explicitly converting the whole model to
+half/bfloat16 also rounds the cached tables, so prefer float32 parameters
+with AMP over converting the model itself to half precision.
+
+The config now disables AMP for a float32 baseline. TF32 remains enabled
+for eligible CUDA matrix multiplications; disable `allow_tf32` as well when
+comparing strict float32 arithmetic. Available GPU memory still determines
+the usable microbatch size. RoPE supports float16/bfloat16 activations if
+AMP is enabled again. The buffers remain nonpersistent, so this cache change
+does not add/remove checkpoint state entries. Previously trained weights
+may nevertheless reflect training with incorrect rotations.
+
 There are five learned scalar gains: one for AttnRes and separate attention
 and FFN gains in each of the two inner transformer blocks. Each is
 `lambda = 2 * sigmoid(logit)`, with `logit = 0` initially. AttnRes therefore

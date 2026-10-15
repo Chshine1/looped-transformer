@@ -2,7 +2,7 @@ runtime:
   device: cuda
   cuda_device_index: 0
   dtype: float32
-  amp_enabled: true
+  amp_enabled: false
   amp_dtype: float16
   seed: 42
   allow_tf32: true

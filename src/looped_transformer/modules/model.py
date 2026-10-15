@@ -11,8 +11,11 @@ from looped_transformer.modules.masked_mean_pooling import MaskedMeanPooling
 from looped_transformer.modules.swi_glu_transformer_block import SwiGLUTransformerBlock
 from looped_transformer.types.model import ModelForwardOutput
 from looped_transformer.types.tokenizer import TokenizerInfo
-from looped_transformer.utils.shared_cache import PositionalRoPECache
-from looped_transformer.utils.shared_cache import TimedMultiHeadRoPECache
+from looped_transformer.utils.shared_cache import (
+    PositionalRoPECache,
+    TimedMultiHeadRoPECache,
+    apply_rotary,
+)
 
 
 class LoopedMNLI(nn.Module):
@@ -43,16 +46,13 @@ class LoopedMNLI(nn.Module):
                 self._model_options.transformer.attention_heads_count,
                 -1,
             )
-            rotation = (
-                self._timed_rope_cache.rotations[t - 1]
-                if t > 0
-                else torch.conj(self._timed_rope_cache.rotations[-t - 1])
+            cosine = self._timed_rope_cache.cosine[abs(t) - 1]
+            sine = self._timed_rope_cache.sine[abs(t) - 1]
+            if t < 0:
+                sine = -sine
+            return apply_rotary(h, cosine.unsqueeze(-1), sine.unsqueeze(-1)).reshape(
+                batch_size, seq_length, -1
             )
-            h1, h2 = h.chunk(2, dim=-1)
-            complex_hidden_state = torch.complex(h1, h2) * rotation.unsqueeze(-1)
-            return torch.cat(
-                [complex_hidden_state.real, complex_hidden_state.imag], dim=-1
-            ).reshape(batch_size, seq_length, -1)
 
     class _Loop(nn.Module):
         def __init__(
