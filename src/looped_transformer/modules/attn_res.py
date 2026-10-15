@@ -1,10 +1,10 @@
 import math
 
 import torch
-from torch import Tensor
-from torch import nn
+from torch import Tensor, nn
 from torch.nn import functional
 
+from looped_transformer.modules.residual_scale import ResidualScale
 from looped_transformer.utils.shared_cache import PositionalRoPECache
 
 
@@ -39,6 +39,29 @@ class AttnRes(nn.Module):
 
         self._out_proj = nn.Linear(d_model, d_model)
         self._dropout = nn.Dropout(dropout)
+        self._residual_scale = ResidualScale()
+
+    def time_rope_regularization(self) -> Tensor:
+        penalties = []
+        for projection in (self._q_proj, self._k_proj):
+            weight = projection.weight.float()
+            blocks = weight.reshape(
+                self._n_heads, self._d_head, self._n_heads, self._d_head
+            ).permute(0, 2, 1, 3)
+            rr, ri = blocks.chunk(2, dim=-2)[0].chunk(2, dim=-1)
+            ir, ii = blocks.chunk(2, dim=-2)[1].chunk(2, dim=-1)
+            a, b = (rr + ii) / 2, (ir - ri) / 2
+            complex_linear = torch.cat(
+                [torch.cat([a, -b], dim=-1), torch.cat([b, a], dim=-1)],
+                dim=-2,
+            )
+            head_mask = torch.eye(self._n_heads, device=weight.device)
+            target = complex_linear * head_mask[:, :, None, None]
+            penalty = (blocks - target).square().sum() / self._d_model
+            if projection.bias is not None:
+                penalty = penalty + projection.bias.float().square().mean()
+            penalties.append(penalty)
+        return torch.stack(penalties).mean()
 
     def _apply_rope(self, x: Tensor, seq_length: int) -> Tensor:
         x1, x2 = x.chunk(2, dim=-1)
@@ -88,4 +111,4 @@ class AttnRes(nn.Module):
 
         out = (history_out * history_weights.reshape(-1, 1, 1, 1, 1)).sum(dim=0)
         out = out.transpose(1, 2).reshape(batch, q_seq_length, self._d_model)
-        return self._out_proj(out)
+        return self._residual_scale() * self._out_proj(out)

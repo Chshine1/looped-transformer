@@ -49,12 +49,20 @@ model:
           save_every_epochs: 1
         optimizer:
           learning_rates:
-            '^$': 0.001
-            '_loop\._loop_normalization': 0.0005
-            '_token_embedding': 0.0005
-            '_loop\._input_injection(?:\..*)?': 0.0005
-            '_loop\._transformer_block[12](?:\..*)?': 0.0005
-            '_classify_normalization': 0.0005
+            # First full match against owning module name wins. Scalars/biases
+            # and RMSNorm vectors have no weight decay (handled by optimizer).
+            # Gates and history selection adapt slowly; shared recurrent weights
+            # use a conservative rate because they affect every iteration.
+            '_attn_res\._residual_scale': 0.0001
+            '_loop\._transformer_block[12]\._(?:attention|ffn)_residual_scale': 0.0001
+            '_attn_res': 0.0001
+            '_attn_res\._[qk]_proj': 0.0003
+            '_attn_res\._(?:v|out)_proj': 0.0004
+            '_token_embedding': 0.0004
+            '_loop\._transformer_block[12]\._normalization[12]': 0.0002
+            '_loop\._transformer_block[12](?:\..*)?': 0.0004
+            '_loop\._loop_normalization': 0.0002
+            '_classify_normalization': 0.0002
             '_classifier': 0.0005
           weight_decay: 0.01
           beta1: 0.9
@@ -67,7 +75,9 @@ model:
           minimum_learning_rate_factor: 0.1
         loss:
           type: last_loop_cross_entropy
-          mean_all_loops: true
+          mean_all_loops: false
+          # Soft per-output-feature distance to time-RoPE-equivariant Q/K.
+          time_rope_regularization_scale: 0.01
       depth_training:
         type: looped_mnli
         common:
@@ -79,12 +89,16 @@ model:
           save_every_epochs: 1
         optimizer:
           learning_rates:
-            '^$': 0.0003
-            '_loop\._loop_normalization': 0.0002
-            '_token_embedding': 0.0002
-            '_loop\._input_injection(?:\..*)?': 0.0002
+            '_attn_res\._residual_scale': 0.00005
+            '_loop\._transformer_block[12]\._(?:attention|ffn)_residual_scale': 0.00005
+            '_attn_res': 0.00005
+            '_attn_res\._[qk]_proj': 0.00015
+            '_attn_res\._(?:v|out)_proj': 0.0002
+            '_token_embedding': 0.0001
+            '_loop\._transformer_block[12]\._normalization[12]': 0.0001
             '_loop\._transformer_block[12](?:\..*)?': 0.0002
-            '_classify_normalization': 0.0002
+            '_loop\._loop_normalization': 0.0001
+            '_classify_normalization': 0.0001
             '_classifier': 0.0002
           weight_decay: 0.01
           beta1: 0.9
@@ -110,6 +124,8 @@ model:
           save_every_epochs: 1
         optimizer:
           learning_rates:
+            '_halting_cell': 0.0001
+            '_halting_cell\._(?:attention|mlp)_normalization': 0.0002
             '_halting_cell(?:\..*)?': 0.0005
           weight_decay: 0.01
           beta1: 0.9
@@ -134,13 +150,19 @@ model:
           save_every_epochs: 1
         optimizer:
           learning_rates:
-            '_halting_cell(?:\..*)?': 0.0002
-            '_loop\._input_injection(?:\..*)?': 0.0001
-            '^$': 0.0001
-            '_loop\._loop_normalization': 0.00005
-            '_token_embedding': 0.00005
+            '_halting_cell': 0.00005
+            '_halting_cell\._(?:attention|mlp)_normalization': 0.00005
+            '_halting_cell(?:\..*)?': 0.0001
+            '_attn_res\._residual_scale': 0.00001
+            '_loop\._transformer_block[12]\._(?:attention|ffn)_residual_scale': 0.00001
+            '_attn_res': 0.00001
+            '_attn_res\._[qk]_proj': 0.00003
+            '_attn_res\._(?:v|out)_proj': 0.00005
+            '_token_embedding': 0.000025
+            '_loop\._transformer_block[12]\._normalization[12]': 0.000025
             '_loop\._transformer_block[12](?:\..*)?': 0.00005
-            '_classify_normalization': 0.00005
+            '_loop\._loop_normalization': 0.000025
+            '_classify_normalization': 0.000025
             '_classifier': 0.00005
           weight_decay: 0.01
           beta1: 0.9

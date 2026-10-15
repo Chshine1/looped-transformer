@@ -68,15 +68,27 @@ def _distribution_cross_entropy(target: Tensor, probabilities: Tensor) -> Tensor
 class LastLoopCrossEntropyLoss(nn.Module):
     """Give every recurrent depth the same direct classification objective."""
 
-    def __init__(self, mean_all_loops: bool):
+    def __init__(
+        self, mean_all_loops: bool, time_rope_regularization_scale: float = 0.0
+    ):
         super().__init__()
         self._mean_all_loops = mean_all_loops
+        if not 0 <= time_rope_regularization_scale < float("inf"):
+            raise ValueError(
+                "time_rope_regularization_scale must be finite and nonnegative"
+            )
+        self._time_rope_regularization_scale = time_rope_regularization_scale
 
     def forward(self, output: ModelTrainOutput, labels: Tensor) -> Tensor:
-        return (
+        task_loss = (
             _cross_entropy_by_time(output, labels).mean()
             if self._mean_all_loops
             else _cross_entropy_by_time(output, labels)[-1].mean()
+        )
+        if self._time_rope_regularization_scale == 0:
+            return task_loss
+        return task_loss + (
+            self._time_rope_regularization_scale * output["time_rope_regularization"]
         )
 
 

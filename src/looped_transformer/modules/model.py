@@ -168,6 +168,7 @@ class LoopedMNLI(nn.Module):
             attn_res: Tensor = self._attn_res(h, history_states[:-1], padding_mask)
             h = h + injection_scale * attn_res
             h = self._loop(h, padding_mask)
+            history_states.append(h)
 
             aligned = self._alignment_rotation(-(t + 1), h)
             pooled = self._mean_pooling(aligned, padding_mask)
@@ -212,6 +213,7 @@ class LoopedMNLI(nn.Module):
                 "mode": "train",
                 "timed_logits": timed_logits,
                 "halt_probabilities": timed_hazards * timed_survivals,
+                "time_rope_regularization": self._attn_res.time_rope_regularization(),
             }
 
         batch_indices = torch.arange(batch_size, device=h.device)

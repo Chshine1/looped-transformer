@@ -20,8 +20,8 @@ from looped_transformer.data_reader import MNLIDataReader
 from looped_transformer.modules.loss import (
     AdaptiveJointLoss,
     DepthWeightedCrossEntropyLoss,
-    LoopedMNLILoss,
     LastLoopCrossEntropyLoss,
+    LoopedMNLILoss,
     OracleHaltingLoss,
 )
 from looped_transformer.stages.registry import register_stage
@@ -179,14 +179,26 @@ class LoopedMNLILossOptions:
 @dataclass(frozen=True, slots=True)
 class LastLoopLossOptions:
     mean_all_loops: bool
+    time_rope_regularization_scale: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.time_rope_regularization_scale < math.inf:
+            raise ValueError(
+                "time_rope_regularization_scale must be finite and nonnegative"
+            )
 
     @classmethod
     def model_validate(cls, value: Any) -> Self:
         raw = require_mapping(value, "last-loop loss options")
-        check_keys(raw, {"type", "mean_all_loops"})
+        check_keys(raw, {"type", "mean_all_loops"}, {"time_rope_regularization_scale"})
         if raw["type"] != "last_loop_cross_entropy":
             raise ValueError("Expected loss type 'last_loop_cross_entropy'")
-        return cls(mean_all_loops=raw["mean_all_loops"])
+        return cls(
+            mean_all_loops=raw["mean_all_loops"],
+            time_rope_regularization_scale=raw.get(
+                "time_rope_regularization_scale", 0.0
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -407,7 +419,9 @@ def _build_loss(options: LossOptions) -> nn.Module:
             aux_scale=options.auxiliary_loss_scale,
         )
     if isinstance(options, LastLoopLossOptions):
-        return LastLoopCrossEntropyLoss(options.mean_all_loops)
+        return LastLoopCrossEntropyLoss(
+            options.mean_all_loops, options.time_rope_regularization_scale
+        )
     if isinstance(options, DepthWeightedLossOptions):
         return DepthWeightedCrossEntropyLoss(
             depth_weight_growth=options.depth_weight_growth,
