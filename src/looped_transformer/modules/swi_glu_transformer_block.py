@@ -1,3 +1,4 @@
+from looped_transformer.utils.shared_cache import PositionalRoPECache
 from torch import Tensor, nn
 from torch.nn import functional
 
@@ -7,18 +8,20 @@ from looped_transformer.modules.multi_head_attention import RoPEMultiHeadAttenti
 class SwiGLUTransformerBlock(nn.Module):
     def __init__(
         self,
+        positional_rope_cache: PositionalRoPECache,
         model_dimension: int,
         ffn_dimension: int,
         heads_count: int,
-        max_sequence_length: int,
         dropout: float,
     ):
         super().__init__()
 
         self._normalization1 = nn.RMSNorm(model_dimension)
+
         self._transformer_attention = RoPEMultiHeadAttention(
-            model_dimension, heads_count, max_sequence_length, dropout
+            positional_rope_cache, model_dimension, heads_count, dropout
         )
+
         self._dropout1 = nn.Dropout(dropout)
 
         self._normalization2 = nn.RMSNorm(model_dimension)

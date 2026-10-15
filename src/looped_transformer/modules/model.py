@@ -1,3 +1,5 @@
+from looped_transformer.utils.shared_cache import TimedMultiHeadRoPECache
+from looped_transformer.utils.shared_cache import PositionalRoPECache
 import math
 import torch
 import torch.nn as nn
@@ -5,6 +7,7 @@ from torch import Tensor
 
 from looped_transformer.config.model import ModelOptions
 from looped_transformer.modules.halting_cell import HaltingCell, HaltingResult
+from looped_transformer.modules.masked_mean_pooling import MaskedMeanPooling
 from looped_transformer.modules.multi_head_attention import RoPEMultiHeadAttention
 from looped_transformer.modules.swi_glu_transformer_block import SwiGLUTransformerBlock
 from looped_transformer.types.model import ModelForwardOutput
@@ -12,28 +15,73 @@ from looped_transformer.types.tokenizer import TokenizerInfo
 
 
 class LoopedMNLI(nn.Module):
-    UNIQUE_TRANSFORMER_BLOCKS = 2
+    class _MultiHeadRotation(nn.Module):
+        _timed_rope_cache: TimedMultiHeadRoPECache
+
+        def __init__(
+            self,
+            timed_rope_cache: TimedMultiHeadRoPECache,
+            model_options: ModelOptions,
+        ):
+            super().__init__()
+            self._model_options = model_options
+            object.__setattr__(self, "_timed_rope_cache", timed_rope_cache)
+
+        def forward(
+            self,
+            t: int,
+            h: Tensor,
+        ) -> Tensor:
+            if t == 0:
+                return h
+
+            batch_size, seq_length, _ = h.shape
+            h = h.reshape(
+                batch_size,
+                seq_length,
+                self._model_options.transformer.attention_heads_count,
+                -1,
+            )
+            rotation = (
+                self._timed_rope_cache.rotations[t - 1]
+                if t > 0
+                else torch.conj(self._timed_rope_cache.rotations[-t - 1])
+            )
+            h1, h2 = h.chunk(2, dim=-1)
+            complex_hidden_state = torch.complex(h1, h2) * rotation.unsqueeze(-1)
+            return torch.cat(
+                [complex_hidden_state.real, complex_hidden_state.imag], dim=-1
+            ).reshape(batch_size, seq_length, -1)
 
     class _Loop(nn.Module):
-        def __init__(self, model_options: ModelOptions):
+        def __init__(
+            self,
+            positional_rope_cache: PositionalRoPECache,
+            timed_rope_cache: TimedMultiHeadRoPECache,
+            model_options: ModelOptions,
+        ):
             super().__init__()
+            self._model_options = model_options
 
             dim = model_options.hidden_state_dimension
             ffn_dim = model_options.transformer.swi_glu_ffn_dimension
             heads_count = model_options.transformer.attention_heads_count
-            max_seq_length = model_options.max_sequence_length
             dropout = model_options.dropout
 
             self._input_injection = RoPEMultiHeadAttention(
-                dim, heads_count, max_seq_length, dropout
+                positional_rope_cache, dim, heads_count, dropout
             )
+
             self._transformer_block1 = SwiGLUTransformerBlock(
-                dim, ffn_dim, heads_count, max_seq_length, dropout
+                positional_rope_cache, dim, ffn_dim, heads_count, dropout
             )
             self._transformer_block2 = SwiGLUTransformerBlock(
-                dim, ffn_dim, heads_count, max_seq_length, dropout
+                positional_rope_cache, dim, ffn_dim, heads_count, dropout
             )
             self._loop_normalization = nn.RMSNorm(dim)
+            self._rotation = LoopedMNLI._MultiHeadRotation(
+                timed_rope_cache, model_options
+            )
 
             self._injection_scale = 1.0 / model_options.max_iterations
             self._transformer_scale = self._injection_scale / math.sqrt(2)
@@ -44,8 +92,6 @@ class LoopedMNLI(nn.Module):
             h0: Tensor,
             h: Tensor,
             padding_mask: Tensor,
-            cos: Tensor,
-            sin: Tensor,
         ) -> Tensor:
             if t > 0:
                 h = h + self._injection_scale * self._input_injection(
@@ -55,11 +101,7 @@ class LoopedMNLI(nn.Module):
             h = self._transformer_block1(h, padding_mask, self._transformer_scale)
             h = self._transformer_block2(h, padding_mask, self._transformer_scale)
             h = self._loop_normalization(h)
-
-            h1, h2 = h.chunk(2, dim=-1)
-            return torch.cat(
-                [h1 * cos[0] - h2 * sin[0], h2 * cos[0] + h1 * sin[0]], dim=-1
-            )
+            return self._rotation(1, h)
 
     def __init__(
         self,
@@ -72,11 +114,14 @@ class LoopedMNLI(nn.Module):
         dim = model_options.hidden_state_dimension
         dropout = model_options.dropout
 
-        loop_rope_cos, loop_rope_sin = self._compute_rope_transformations(
-            dim, model_options.max_iterations
+        heads_count = model_options.transformer.attention_heads_count
+        head_dimension = model_options.hidden_state_dimension // heads_count
+        self._positional_rope = PositionalRoPECache(
+            head_dimension, model_options.max_sequence_length
         )
-        self.register_buffer("_loop_rope_cos", loop_rope_cos, persistent=False)
-        self.register_buffer("_loop_rope_sin", loop_rope_sin, persistent=False)
+        self._timed_rope = TimedMultiHeadRoPECache(
+            heads_count, model_options.max_iterations, 4.8
+        )
 
         self._token_embedding = nn.Embedding(
             tokenizer_info.vocab_size,
@@ -85,23 +130,17 @@ class LoopedMNLI(nn.Module):
         )
         self._dropout = nn.Dropout(dropout)
 
-        self._loop = self._Loop(model_options)
+        self._loop = self._Loop(self._positional_rope, self._timed_rope, model_options)
 
-        self._halting_cell = HaltingCell(model_options)
+        self._alignment_rotation = self._MultiHeadRotation(
+            self._timed_rope, model_options
+        )
+        self._mean_pooling = MaskedMeanPooling()
+
+        self._halting_cell = HaltingCell(self._positional_rope, model_options)
 
         self._classify_normalization = nn.RMSNorm(dim)
         self._classifier = nn.Linear(dim, model_options.output_classes_count)
-
-    @staticmethod
-    def _compute_rope_transformations(model_dimension: int, max_iterations: int):
-        frequencies = 1.0 / (
-            5.1 ** (torch.arange(0, model_dimension, 2).float() / model_dimension)
-        )
-        t = torch.arange(1, max_iterations + 1, dtype=torch.float32)
-        frequencies = torch.outer(t, frequencies)
-        cos = torch.cos(frequencies)
-        sin = torch.sin(frequencies)
-        return cos, sin
 
     def forward(self, input_ids: Tensor, padding_mask: Tensor) -> ModelForwardOutput:
         dimension = self._model_options.hidden_state_dimension
@@ -109,9 +148,6 @@ class LoopedMNLI(nn.Module):
 
         h0: Tensor = self._token_embedding(input_ids)
         h: Tensor = self._dropout(h0)
-
-        cos = self._loop_rope_cos.to(dtype=h.dtype)
-        sin = self._loop_rope_sin.to(dtype=h.dtype)
 
         logits_list: list[Tensor] = []
         hazards_list: list[Tensor] = []
@@ -128,21 +164,16 @@ class LoopedMNLI(nn.Module):
         batches_halted = torch.zeros(batch_size, device=h.device, dtype=torch.bool)
 
         for t in range(self._model_options.max_iterations):
-            h = self._loop(t, h0, h, padding_mask, cos, sin)
+            h = self._loop(t, h0, h, padding_mask)
 
-            h1, h2 = h.chunk(2, dim=-1)
-            aligned_hidden_state = torch.cat(
-                [h1 * cos[t] + h2 * sin[t], h2 * cos[t] - h1 * sin[t]], dim=-1
-            )
-
-            mask = padding_mask.unsqueeze(-1).to(aligned_hidden_state.dtype)
-            pooled = (aligned_hidden_state * mask).sum(1) / mask.sum(1).clamp(min=1)
+            aligned = self._alignment_rotation(-(t + 1), h)
+            pooled = self._mean_pooling(aligned, padding_mask)
             logits = self._classifier(self._classify_normalization(pooled))
 
             logits_list.append(logits)
 
             halting_result: HaltingResult = self._halting_cell(
-                t, aligned_hidden_state.detach(), halting_hidden_state, padding_mask
+                t, aligned.detach(), halting_hidden_state, padding_mask
             )
             halting_hidden_state = halting_result["hidden_state"]
 

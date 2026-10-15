@@ -1,3 +1,4 @@
+from looped_transformer.utils.shared_cache import PositionalRoPECache
 import math
 
 import torch
@@ -7,10 +8,18 @@ from torch import Tensor
 
 
 class RoPEMultiHeadAttention(nn.Module):
+    _rope_cache: PositionalRoPECache
+
     def __init__(
-        self, d_model: int, n_heads: int, max_sequence_length: int, dropout: float
+        self,
+        positional_rope_cache: PositionalRoPECache,
+        d_model: int,
+        n_heads: int,
+        dropout: float,
     ):
         super().__init__()
+        object.__setattr__(self, "_rope_cache", positional_rope_cache)
+
         assert d_model % n_heads == 0, "d_model must be divisible by n_heads"
         self._d_model = d_model
         self._n_heads = n_heads
@@ -27,34 +36,17 @@ class RoPEMultiHeadAttention(nn.Module):
         self._out_proj = nn.Linear(d_model, d_model)
         self._dropout = nn.Dropout(dropout)
 
-        rope_cos, rope_sin = self._compute_rope_transformations(
-            self._d_head, max_sequence_length
-        )
-        self.register_buffer("_rope_cos", rope_cos, persistent=False)
-        self.register_buffer("_rope_sin", rope_sin, persistent=False)
-
-    @staticmethod
-    def _compute_rope_transformations(model_dimension: int, max_sequence_length: int):
-        frequencies = 1.0 / (
-            100.0 ** (torch.arange(0, model_dimension, 2).float() / model_dimension)
-        )
-        t = torch.arange(max_sequence_length, dtype=torch.float32)
-        frequencies = torch.outer(t, frequencies)
-        cos = torch.cos(frequencies)
-        sin = torch.sin(frequencies)
-        return cos, sin
-
     def _apply_rope(self, x: Tensor) -> Tensor:
         seq_length = x.size(2)
-        if seq_length > self._rope_cos.size(0):
+        if seq_length > self._rope_cache.cos.size(0):
             raise ValueError(
                 f"Sequence length {seq_length} exceeds the configured maximum "
-                f"{self._rope_cos.size(0)}"
+                f"{self._rope_cache.cos.size(0)}"
             )
 
         x1, x2 = x.chunk(2, dim=-1)
-        cos = self._rope_cos[:seq_length].to(dtype=x.dtype)
-        sin = self._rope_sin[:seq_length].to(dtype=x.dtype)
+        cos = self._rope_cache.cos[:seq_length].to(dtype=x.dtype)
+        sin = self._rope_cache.sin[:seq_length].to(dtype=x.dtype)
         return torch.cat([x1 * cos - x2 * sin, x2 * cos + x1 * sin], dim=-1)
 
     def forward(

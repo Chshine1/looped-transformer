@@ -1,3 +1,4 @@
+from looped_transformer.utils.shared_cache import PositionalRoPECache
 import torch
 from torch import Tensor, nn
 from torch.nn import functional
@@ -8,7 +9,9 @@ from looped_transformer.types.halting_cell import HaltingResult
 
 
 class HaltingCell(nn.Module):
-    def __init__(self, model_options: ModelOptions):
+    def __init__(
+        self, positional_rope_cache: PositionalRoPECache, model_options: ModelOptions
+    ):
         super().__init__()
 
         dim = model_options.hidden_state_dimension
@@ -29,7 +32,7 @@ class HaltingCell(nn.Module):
         self._rnn_cell = nn.GRUCell(input_size=dim, hidden_size=dim)
         self._attention_normalization = nn.RMSNorm(dim)
         self._attention = RoPEMultiHeadAttention(
-            dim, heads_count, model_options.max_sequence_length, dropout
+            positional_rope_cache, dim, heads_count, dropout
         )
         self._attention_dropout = nn.Dropout(dropout)
 
