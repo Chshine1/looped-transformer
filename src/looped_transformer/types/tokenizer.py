@@ -7,6 +7,8 @@ from torch import Tensor
 class TokenizerInfo:
     vocab_size: int
     pad_token_id: int
+    mask_token_id: int = 103
+    special_token_ids: tuple[int, ...] = (0, 100, 101, 102, 103)
 
 
 @dataclass

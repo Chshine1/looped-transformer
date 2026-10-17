@@ -1,3 +1,4 @@
+import os
 from collections.abc import Sequence
 from typing import cast
 
@@ -14,12 +15,25 @@ from looped_transformer.types.tokenizer import TokenizeResult, TokenizerInfo
 class MNLITokenizer:
     def __init__(self, model_options: ModelOptions):
         self._model_options = model_options
-        self._tokenizer = BertTokenizerFast.from_pretrained("bert-base-uncased")
+        offline = os.environ.get("HF_HUB_OFFLINE", "").lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        source = "local cache only" if offline else "local cache or Hugging Face Hub"
+        print(f"Loading bert-base-uncased tokenizer ({source})...", flush=True)
+        self._tokenizer = BertTokenizerFast.from_pretrained(
+            "bert-base-uncased",
+            local_files_only=offline,
+        )
+        print("Tokenizer loaded.", flush=True)
 
     def get_tokenizer_info(self) -> TokenizerInfo:
         return TokenizerInfo(
             vocab_size=self._tokenizer.vocab_size,
             pad_token_id=cast(int, self._tokenizer.pad_token_id),
+            mask_token_id=cast(int, self._tokenizer.mask_token_id),
+            special_token_ids=tuple(self._tokenizer.all_special_ids),
         )
 
     def encode(

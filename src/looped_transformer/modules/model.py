@@ -70,10 +70,24 @@ class LoopedMNLI(nn.Module):
             dropout = model_options.dropout
 
             self._transformer_block1 = SwiGLUTransformerBlock(
-                positional_rope_cache, dim, ffn_dim, heads_count, dropout
+                positional_rope_cache,
+                dim,
+                ffn_dim,
+                heads_count,
+                dropout.attention,
+                dropout.residual,
+                dropout.ffn,
+                dropout.stochastic_depth,
             )
             self._transformer_block2 = SwiGLUTransformerBlock(
-                positional_rope_cache, dim, ffn_dim, heads_count, dropout
+                positional_rope_cache,
+                dim,
+                ffn_dim,
+                heads_count,
+                dropout.attention,
+                dropout.residual,
+                dropout.ffn,
+                dropout.stochastic_depth,
             )
             self._loop_normalization = nn.RMSNorm(dim)
             self._rotation = LoopedMNLI._MultiHeadRotation(
@@ -119,14 +133,19 @@ class LoopedMNLI(nn.Module):
             dim,
             padding_idx=tokenizer_info.pad_token_id,
         )
-        self._dropout = nn.Dropout(dropout)
+        self._token_dropout = dropout.token
+        self._mask_token_id = tokenizer_info.mask_token_id
+        self._special_token_ids = tokenizer_info.special_token_ids
+        self._embedding_dropout = nn.Dropout(dropout.embedding)
 
         self._attn_res = AttnRes(
             self._positional_rope,
             dim,
             heads_count,
             model_options.max_iterations,
-            dropout,
+            dropout.attention,
+            dropout.residual,
+            dropout.stochastic_depth,
         )
         self._loop = self._Loop(self._positional_rope, self._timed_rope, model_options)
 
@@ -138,13 +157,29 @@ class LoopedMNLI(nn.Module):
         self._halting_cell = HaltingCell(self._positional_rope, model_options)
 
         self._classify_normalization = nn.RMSNorm(dim)
+        self._classifier_dropout = nn.Dropout(dropout.classifier)
         self._classifier = nn.Linear(dim, model_options.output_classes_count)
 
-    def forward(self, input_ids: Tensor, padding_mask: Tensor) -> ModelForwardOutput:
+    def forward(
+        self,
+        input_ids: Tensor,
+        padding_mask: Tensor,
+        *,
+        force_all_loops: bool = False,
+    ) -> ModelForwardOutput:
         dimension = self._model_options.hidden_state_dimension
         batch_size, seq_length = input_ids.shape
 
-        h0: Tensor = self._token_embedding(input_ids)
+        if self.training and self._token_dropout > 0:
+            eligible = padding_mask.bool()
+            for special_token_id in self._special_token_ids:
+                eligible = eligible & (input_ids != special_token_id)
+            dropped = (
+                torch.rand_like(input_ids, dtype=torch.float32) < self._token_dropout
+            ) & eligible
+            input_ids = input_ids.masked_fill(dropped, self._mask_token_id)
+
+        h0: Tensor = self._embedding_dropout(self._token_embedding(input_ids))
         h: Tensor = h0
         history_states: list[Tensor] = [h0]
 
@@ -172,7 +207,9 @@ class LoopedMNLI(nn.Module):
 
             aligned = self._alignment_rotation(-(t + 1), h)
             pooled = self._mean_pooling(aligned, padding_mask)
-            logits = self._classifier(self._classify_normalization(pooled))
+            logits = self._classifier(
+                self._classifier_dropout(self._classify_normalization(pooled))
+            )
 
             logits_list.append(logits)
 
@@ -186,7 +223,7 @@ class LoopedMNLI(nn.Module):
             survivals = survivals_list[-1] * (1 - hazards)
             survivals_list.append(survivals)
 
-            if self.training:
+            if self.training or force_all_loops:
                 continue
 
             halt_batches = (~batches_halted) & (
@@ -204,7 +241,7 @@ class LoopedMNLI(nn.Module):
 
         timed_logits = torch.stack(logits_list)
 
-        if self.training:
+        if self.training or force_all_loops:
             timed_hazards = torch.stack(hazards_list)
             timed_hazards[-1, :] = 1.0
             timed_survivals = torch.stack(survivals_list[:-1])
@@ -221,4 +258,5 @@ class LoopedMNLI(nn.Module):
         return {
             "mode": "eval",
             "logits": timed_logits[halting_times, batch_indices],
+            "iterations": halting_times + 1,
         }

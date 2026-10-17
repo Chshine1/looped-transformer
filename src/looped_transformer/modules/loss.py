@@ -5,7 +5,9 @@ from torch.nn import functional
 from looped_transformer.types.model import ModelTrainOutput
 
 
-def _cross_entropy_by_time(output: ModelTrainOutput, labels: Tensor) -> Tensor:
+def _cross_entropy_by_time(
+    output: ModelTrainOutput, labels: Tensor, label_smoothing: float = 0.0
+) -> Tensor:
     """Return unreduced cross-entropy with shape (iterations, batch)."""
     logits = output["timed_logits"].float()
     iterations, _, classes = logits.shape
@@ -13,23 +15,8 @@ def _cross_entropy_by_time(output: ModelTrainOutput, labels: Tensor) -> Tensor:
         logits.reshape(-1, classes),
         labels.unsqueeze(0).expand(iterations, -1).reshape(-1),
         reduction="none",
+        label_smoothing=label_smoothing,
     ).reshape(iterations, -1)
-
-
-def _depth_weights(cross_entropy: Tensor, growth: float) -> Tensor:
-    iterations = cross_entropy.size(0)
-    indices = torch.arange(
-        iterations, device=cross_entropy.device, dtype=cross_entropy.dtype
-    )
-    return torch.softmax(growth * indices, dim=0)
-
-
-def _monotonic_loss(cross_entropy: Tensor) -> Tensor:
-    if cross_entropy.size(0) < 2:
-        return cross_entropy.new_zeros(())
-    # Only improve a worse later step; never satisfy the constraint by making the
-    # preceding step worse.
-    return functional.relu(cross_entropy[1:] - cross_entropy[:-1].detach()).mean()
 
 
 def get_loop_metrics(output: ModelTrainOutput, labels: Tensor) -> tuple[Tensor, Tensor]:
@@ -45,46 +32,51 @@ def get_loop_metrics(output: ModelTrainOutput, labels: Tensor) -> tuple[Tensor, 
     return cross_entropy.mean(dim=1), (probabilities * time).sum(0).mean()
 
 
-def _oracle_halting_distribution(
-    cross_entropy: Tensor,
-    compute_cost: float,
-    temperature: float,
-) -> Tensor:
-    iterations = cross_entropy.size(0)
-    time = torch.arange(
-        1,
-        iterations + 1,
-        device=cross_entropy.device,
-        dtype=cross_entropy.dtype,
-    ).unsqueeze(1)
-    cost = cross_entropy.detach() + compute_cost * time
-    return torch.softmax(-cost / temperature, dim=0)
-
-
-def _distribution_cross_entropy(target: Tensor, probabilities: Tensor) -> Tensor:
-    return -(target * torch.log(probabilities.float().clamp_min(1e-8))).sum(0).mean()
-
-
-class LastLoopCrossEntropyLoss(nn.Module):
-    """Give every recurrent depth the same direct classification objective."""
+class SampledLoopCrossEntropyLoss(nn.Module):
+    """Supervise one independently sampled recurrent depth per example."""
 
     def __init__(
-        self, mean_all_loops: bool, time_rope_regularization_scale: float = 0.0
+        self,
+        loops: tuple[int, ...],
+        weights: tuple[float, ...],
+        time_rope_regularization_scale: float = 0.0,
     ):
         super().__init__()
-        self._mean_all_loops = mean_all_loops
+        if not loops or len(loops) != len(weights):
+            raise ValueError("loops and weights must have the same nonzero length")
+        if any(loop <= 0 for loop in loops) or len(set(loops)) != len(loops):
+            raise ValueError("loops must contain unique positive 1-based indices")
+        weight_tensor = torch.tensor(weights, dtype=torch.float32)
+        if not torch.isfinite(weight_tensor).all() or (weight_tensor < 0).any():
+            raise ValueError("weights must be finite and nonnegative")
+        if weight_tensor.sum() <= 0:
+            raise ValueError("at least one sampled-loop weight must be positive")
         if not 0 <= time_rope_regularization_scale < float("inf"):
             raise ValueError(
                 "time_rope_regularization_scale must be finite and nonnegative"
             )
+
+        self._loops = tuple(loop - 1 for loop in loops)
+        self.register_buffer("_weights", weight_tensor / weight_tensor.sum())
         self._time_rope_regularization_scale = time_rope_regularization_scale
 
     def forward(self, output: ModelTrainOutput, labels: Tensor) -> Tensor:
-        task_loss = (
-            _cross_entropy_by_time(output, labels).mean()
-            if self._mean_all_loops
-            else _cross_entropy_by_time(output, labels)[-1].mean()
+        cross_entropy = _cross_entropy_by_time(output, labels)
+        if max(self._loops) >= cross_entropy.size(0):
+            raise ValueError(
+                f"sampled loop {max(self._loops) + 1} exceeds model loop count "
+                f"{cross_entropy.size(0)}"
+            )
+
+        sampled_candidates = torch.multinomial(
+            self._weights, labels.numel(), replacement=True
         )
+        loop_indices = torch.tensor(
+            self._loops, device=cross_entropy.device, dtype=torch.long
+        )[sampled_candidates]
+        batch_indices = torch.arange(labels.numel(), device=cross_entropy.device)
+        task_loss = cross_entropy[loop_indices, batch_indices].mean()
+
         if self._time_rope_regularization_scale == 0:
             return task_loss
         return task_loss + (
@@ -92,89 +84,72 @@ class LastLoopCrossEntropyLoss(nn.Module):
         )
 
 
-class DepthWeightedCrossEntropyLoss(nn.Module):
-    """Emphasize later depths while penalizing degradation between adjacent depths."""
-
-    def __init__(self, depth_weight_growth: float, monotonic_loss_scale: float):
-        super().__init__()
-        self._depth_weight_growth = depth_weight_growth
-        self._monotonic_loss_scale = monotonic_loss_scale
-
-    def forward(self, output: ModelTrainOutput, labels: Tensor) -> Tensor:
-        cross_entropy = _cross_entropy_by_time(output, labels)
-        weights = _depth_weights(cross_entropy, self._depth_weight_growth)
-        weighted_task = (weights[:, None] * cross_entropy).sum(0).mean()
-        return weighted_task + self._monotonic_loss_scale * _monotonic_loss(
-            cross_entropy
-        )
-
-
-class OracleHaltingLoss(nn.Module):
-    """Fit the controller to the loss--compute optimum of a frozen backbone."""
-
-    def __init__(self, compute_cost: float, target_temperature: float):
-        super().__init__()
-        self._compute_cost = compute_cost
-        self._target_temperature = target_temperature
-
-    def forward(self, output: ModelTrainOutput, labels: Tensor) -> Tensor:
-        cross_entropy = _cross_entropy_by_time(output, labels)
-        target = _oracle_halting_distribution(
-            cross_entropy, self._compute_cost, self._target_temperature
-        )
-        return _distribution_cross_entropy(target, output["halt_probabilities"])
-
-
-class AdaptiveJointLoss(nn.Module):
-    """Jointly optimize expected task risk, compute, depth stability, and halting."""
+class AnchoredSampledLoopCrossEntropyLoss(nn.Module):
+    """Anchor the final loop and weakly supervise one earlier loop per example."""
 
     def __init__(
         self,
-        compute_cost: float,
-        target_temperature: float,
-        controller_loss_scale: float,
-        depth_loss_scale: float,
-        depth_weight_growth: float,
-        monotonic_loss_scale: float,
+        sampled_loops: tuple[int, ...],
+        sampled_weights: tuple[float, ...],
+        sampled_loss_scale: float,
+        label_smoothing: float = 0.0,
+        time_rope_regularization_scale: float = 0.0,
     ):
         super().__init__()
-        self._compute_cost = compute_cost
-        self._target_temperature = target_temperature
-        self._controller_loss_scale = controller_loss_scale
-        self._depth_loss_scale = depth_loss_scale
-        self._depth_weight_growth = depth_weight_growth
-        self._monotonic_loss_scale = monotonic_loss_scale
+        if not sampled_loops or len(sampled_loops) != len(sampled_weights):
+            raise ValueError(
+                "sampled_loops and sampled_weights must have the same nonzero length"
+            )
+        if any(loop <= 0 for loop in sampled_loops) or len(set(sampled_loops)) != len(
+            sampled_loops
+        ):
+            raise ValueError(
+                "sampled_loops must contain unique positive 1-based indices"
+            )
+        weight_tensor = torch.tensor(sampled_weights, dtype=torch.float32)
+        if not torch.isfinite(weight_tensor).all() or (weight_tensor < 0).any():
+            raise ValueError("sampled_weights must be finite and nonnegative")
+        if weight_tensor.sum() <= 0:
+            raise ValueError("at least one sampled-loop weight must be positive")
+        if not 0 <= sampled_loss_scale < float("inf"):
+            raise ValueError("sampled_loss_scale must be finite and nonnegative")
+        if not 0 <= label_smoothing < 1:
+            raise ValueError("label_smoothing must be in [0, 1)")
+        if not 0 <= time_rope_regularization_scale < float("inf"):
+            raise ValueError(
+                "time_rope_regularization_scale must be finite and nonnegative"
+            )
+
+        self._sampled_loops = tuple(loop - 1 for loop in sampled_loops)
+        self.register_buffer("_sampled_weights", weight_tensor / weight_tensor.sum())
+        self._sampled_loss_scale = sampled_loss_scale
+        self._label_smoothing = label_smoothing
+        self._time_rope_regularization_scale = time_rope_regularization_scale
 
     def forward(self, output: ModelTrainOutput, labels: Tensor) -> Tensor:
-        cross_entropy = _cross_entropy_by_time(output, labels)
-        probabilities = output["halt_probabilities"].float()
-        iterations = cross_entropy.size(0)
-        time = torch.arange(
-            1,
-            iterations + 1,
-            device=cross_entropy.device,
-            dtype=cross_entropy.dtype,
-        ).unsqueeze(1)
-
-        expected_risk = (probabilities * cross_entropy).sum(0).mean()
-        expected_compute = (probabilities * time).sum(0).mean()
-
-        weights = _depth_weights(cross_entropy, self._depth_weight_growth)
-        depth_task = (weights[:, None] * cross_entropy).sum(0).mean()
-        depth_task = depth_task + self._monotonic_loss_scale * _monotonic_loss(
-            cross_entropy
+        cross_entropy = _cross_entropy_by_time(
+            output, labels, label_smoothing=self._label_smoothing
         )
+        if max(self._sampled_loops) >= cross_entropy.size(0) - 1:
+            raise ValueError(
+                "sampled loops must be earlier than the final model loop "
+                f"{cross_entropy.size(0)}"
+            )
 
-        target = _oracle_halting_distribution(
-            cross_entropy, self._compute_cost, self._target_temperature
+        sampled_candidates = torch.multinomial(
+            self._sampled_weights, labels.numel(), replacement=True
         )
-        controller_loss = _distribution_cross_entropy(target, probabilities)
+        loop_indices = torch.tensor(
+            self._sampled_loops, device=cross_entropy.device, dtype=torch.long
+        )[sampled_candidates]
+        batch_indices = torch.arange(labels.numel(), device=cross_entropy.device)
+        sampled_loss = cross_entropy[loop_indices, batch_indices].mean()
+        task_loss = cross_entropy[-1].mean() + self._sampled_loss_scale * sampled_loss
 
-        return (
-            expected_risk
-            + self._compute_cost * expected_compute
-            + self._depth_loss_scale * depth_task
-            + self._controller_loss_scale * controller_loss
+        if self._time_rope_regularization_scale == 0:
+            return task_loss
+        return task_loss + (
+            self._time_rope_regularization_scale * output["time_rope_regularization"]
         )
 
 

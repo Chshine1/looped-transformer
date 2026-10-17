@@ -1,6 +1,6 @@
 import math
-from dataclasses import dataclass, field
-from typing import Literal
+from dataclasses import dataclass
+from typing import Any, Self
 
 from looped_transformer.config.training import TrainingOptions
 
@@ -29,12 +29,75 @@ class EvaluationOptions:
 
 
 @dataclass(frozen=True, slots=True)
+class DropoutOptions:
+    token: float = 0.0
+    embedding: float = 0.1
+    attention: float = 0.1
+    residual: float = 0.1
+    ffn: float = 0.1
+    classifier: float = 0.1
+    controller: float = 0.1
+    stochastic_depth: float = 0.0
+
+    def __post_init__(self) -> None:
+        for name, probability in (
+            ("token", self.token),
+            ("embedding", self.embedding),
+            ("attention", self.attention),
+            ("residual", self.residual),
+            ("ffn", self.ffn),
+            ("classifier", self.classifier),
+            ("controller", self.controller),
+            ("stochastic_depth", self.stochastic_depth),
+        ):
+            if not isinstance(probability, int | float) or not math.isfinite(
+                probability
+            ):
+                raise TypeError(f"{name} dropout must be a finite number")
+            if not 0 <= probability < 1:
+                raise ValueError(f"{name} dropout must be in [0, 1)")
+
+    @classmethod
+    def model_validate(cls, value: Any) -> Self:
+        if isinstance(value, int | float) and not isinstance(value, bool):
+            # Preserve the historical scalar behavior. Embedding and classifier
+            # dropout modules existed only nominally or not at all.
+            return cls(
+                token=0.0,
+                embedding=0.0,
+                attention=value,
+                residual=value,
+                ffn=value,
+                classifier=0.0,
+                controller=value,
+                stochastic_depth=0.0,
+            )
+        if not isinstance(value, dict):
+            raise TypeError("dropout must be a number or mapping")
+        unexpected = value.keys() - {
+            "embedding",
+            "token",
+            "attention",
+            "residual",
+            "ffn",
+            "classifier",
+            "controller",
+            "stochastic_depth",
+        }
+        if unexpected:
+            raise ValueError(
+                "Unexpected dropout options: " + ", ".join(sorted(unexpected))
+            )
+        return cls(**value)
+
+
+@dataclass(frozen=True, slots=True)
 class ModelOptions:
     hidden_state_dimension: int
     output_classes_count: int
     max_iterations: int
     max_sequence_length: int
-    dropout: float
+    dropout: DropoutOptions
 
     transformer: TransformerOptions
     halting: HaltingOptions

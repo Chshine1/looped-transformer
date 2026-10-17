@@ -4,6 +4,7 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional
 
+from looped_transformer.modules.batch_dropout import BatchDropout
 from looped_transformer.modules.residual_scale import ResidualScale
 from looped_transformer.utils.shared_cache import PositionalRoPECache, apply_rotary
 
@@ -17,7 +18,9 @@ class AttnRes(nn.Module):
         d_model: int,
         n_heads: int,
         max_iterations: int,
-        dropout: float,
+        attention_dropout: float,
+        residual_dropout: float,
+        stochastic_depth: float,
     ):
         super().__init__()
         object.__setattr__(self, "_rope_cache", positional_rope_cache)
@@ -38,7 +41,9 @@ class AttnRes(nn.Module):
         self._history_bias = nn.Parameter(torch.zeros(max_iterations))
 
         self._out_proj = nn.Linear(d_model, d_model)
-        self._dropout = nn.Dropout(dropout)
+        self._attention_dropout = nn.Dropout(attention_dropout)
+        self._residual_dropout = nn.Dropout(residual_dropout)
+        self._batch_dropout = BatchDropout(stochastic_depth)
         self._residual_scale = ResidualScale()
 
     def time_rope_regularization(self) -> Tensor:
@@ -103,7 +108,7 @@ class AttnRes(nn.Module):
         )
 
         history_attention = functional.softmax(scores, dim=-1)
-        history_attention = self._dropout(history_attention)
+        history_attention = self._attention_dropout(history_attention)
         history_out = history_attention @ v
 
         history_logits = self._history_bias[:history_length]
@@ -111,4 +116,5 @@ class AttnRes(nn.Module):
 
         out = (history_out * history_weights.reshape(-1, 1, 1, 1, 1)).sum(dim=0)
         out = out.transpose(1, 2).reshape(batch, q_seq_length, self._d_model)
-        return self._residual_scale() * self._out_proj(out)
+        out = self._residual_scale() * self._out_proj(out)
+        return self._batch_dropout(self._residual_dropout(out))

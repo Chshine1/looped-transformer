@@ -24,7 +24,15 @@ model:
   output_classes_count: 3
   max_iterations: 6
   max_sequence_length: 128
-  dropout: 0.1
+  dropout:
+    token: 0.00
+    embedding: 0.10
+    attention: 0.10
+    residual: 0.10
+    ffn: 0.10
+    classifier: 0.10
+    controller: 0.10
+    stochastic_depth: 0.05
   transformer:
     swi_glu_ffn_dimension: 704
     gelu_ffn_dimension: 1024
@@ -49,10 +57,6 @@ model:
           save_every_epochs: 1
         optimizer:
           learning_rates:
-            # First full match against owning module name wins. Scalars/biases
-            # and RMSNorm vectors have no weight decay (handled by optimizer).
-            # Gates and history selection adapt slowly; shared recurrent weights
-            # use a conservative rate because they affect every iteration.
             '_attn_res\._residual_scale': 0.0001
             '_loop\._transformer_block[12]\._(?:attention|ffn)_residual_scale': 0.0001
             '_attn_res': 0.0001
@@ -74,113 +78,12 @@ model:
           warmup_start_factor: 0.1
           minimum_learning_rate_factor: 0.1
         loss:
-          type: last_loop_cross_entropy
-          mean_all_loops: false
-          # Soft per-output-feature distance to time-RoPE-equivariant Q/K.
+          type: anchored_sampled_loop_cross_entropy
+          sampled_loops: [3, 4, 5]
+          sampled_weights: [1.0, 1.0, 1.0]
+          sampled_loss_scale: 0.20
+          label_smoothing: 0.05
           time_rope_regularization_scale: 0.01
-      depth_training:
-        type: looped_mnli
-        common:
-          epochs: 8
-          frozen_patterns: '^_halting_cell\.'
-          evaluation_patterns: '^_halting_cell(?:\.|$)'
-          max_gradient_norm: 1.0
-          gradient_accumulation_steps: 1
-          save_every_epochs: 1
-        optimizer:
-          learning_rates:
-            '_attn_res\._residual_scale': 0.00005
-            '_loop\._transformer_block[12]\._(?:attention|ffn)_residual_scale': 0.00005
-            '_attn_res': 0.00005
-            '_attn_res\._[qk]_proj': 0.00015
-            '_attn_res\._(?:v|out)_proj': 0.0002
-            '_token_embedding': 0.0001
-            '_loop\._transformer_block[12]\._normalization[12]': 0.0001
-            '_loop\._transformer_block[12](?:\..*)?': 0.0002
-            '_loop\._loop_normalization': 0.0001
-            '_classify_normalization': 0.0001
-            '_classifier': 0.0002
-          weight_decay: 0.01
-          beta1: 0.9
-          beta2: 0.999
-          epsilon: 0.00000001
-        scheduler:
-          type: warmup_cosine
-          warmup_ratio: 0.02
-          warmup_start_factor: 0.5
-          minimum_learning_rate_factor: 0.1
-        loss:
-          type: depth_weighted_cross_entropy
-          depth_weight_growth: 0.5
-          monotonic_loss_scale: 0.2
-      controller_training:
-        type: looped_mnli
-        common:
-          epochs: 2
-          frozen_patterns: '^(?!_halting_cell\.).*'
-          evaluation_patterns: '^(?!_halting_cell(?:\.|$)).*'
-          max_gradient_norm: 1.0
-          gradient_accumulation_steps: 1
-          save_every_epochs: 1
-        optimizer:
-          learning_rates:
-            '_halting_cell': 0.0001
-            '_halting_cell\._(?:attention|mlp)_normalization': 0.0002
-            '_halting_cell(?:\..*)?': 0.0005
-          weight_decay: 0.01
-          beta1: 0.9
-          beta2: 0.999
-          epsilon: 0.00000001
-        scheduler:
-          type: warmup_constant
-          warmup_ratio: 0.05
-          warmup_start_factor: 0.1
-        loss:
-          type: oracle_halting
-          compute_cost: 0.02
-          target_temperature: 0.1
-      joint:
-        type: looped_mnli
-        common:
-          epochs: 4
-          frozen_patterns: '(?!)'
-          evaluation_patterns: '(?!)'
-          max_gradient_norm: 1.0
-          gradient_accumulation_steps: 1
-          save_every_epochs: 1
-        optimizer:
-          learning_rates:
-            '_halting_cell': 0.00005
-            '_halting_cell\._(?:attention|mlp)_normalization': 0.00005
-            '_halting_cell(?:\..*)?': 0.0001
-            '_attn_res\._residual_scale': 0.00001
-            '_loop\._transformer_block[12]\._(?:attention|ffn)_residual_scale': 0.00001
-            '_attn_res': 0.00001
-            '_attn_res\._[qk]_proj': 0.00003
-            '_attn_res\._(?:v|out)_proj': 0.00005
-            '_token_embedding': 0.000025
-            '_loop\._transformer_block[12]\._normalization[12]': 0.000025
-            '_loop\._transformer_block[12](?:\..*)?': 0.00005
-            '_loop\._loop_normalization': 0.000025
-            '_classify_normalization': 0.000025
-            '_classifier': 0.00005
-          weight_decay: 0.01
-          beta1: 0.9
-          beta2: 0.999
-          epsilon: 0.00000001
-        scheduler:
-          type: warmup_cosine
-          warmup_ratio: 0.02
-          warmup_start_factor: 0.5
-          minimum_learning_rate_factor: 0.1
-        loss:
-          type: adaptive_joint
-          compute_cost: 0.02
-          target_temperature: 0.1
-          controller_loss_scale: 0.1
-          depth_loss_scale: 0.1
-          depth_weight_growth: 0.5
-          monotonic_loss_scale: 0.2
   evaluation:
     halt_hazard_threshold: 0.6
     halt_survival_threshold: 0.05

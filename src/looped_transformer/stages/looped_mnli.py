@@ -18,11 +18,8 @@ from looped_transformer.config.training import (
 )
 from looped_transformer.data_reader import MNLIDataReader
 from looped_transformer.modules.loss import (
-    AdaptiveJointLoss,
-    DepthWeightedCrossEntropyLoss,
-    LastLoopCrossEntropyLoss,
+    AnchoredSampledLoopCrossEntropyLoss,
     LoopedMNLILoss,
-    OracleHaltingLoss,
 )
 from looped_transformer.stages.registry import register_stage
 from looped_transformer.types.data import DataSplit
@@ -177,123 +174,79 @@ class LoopedMNLILossOptions:
 
 
 @dataclass(frozen=True, slots=True)
-class LastLoopLossOptions:
-    mean_all_loops: bool
+class AnchoredSampledLoopLossOptions:
+    sampled_loops: tuple[int, ...]
+    sampled_weights: tuple[float, ...]
+    sampled_loss_scale: float
+    label_smoothing: float = 0.0
     time_rope_regularization_scale: float = 0.0
 
     def __post_init__(self) -> None:
-        if not 0 <= self.time_rope_regularization_scale < math.inf:
+        if not self.sampled_loops or len(self.sampled_loops) != len(
+            self.sampled_weights
+        ):
             raise ValueError(
-                "time_rope_regularization_scale must be finite and nonnegative"
+                "sampled_loops and sampled_weights must have the same nonzero length"
             )
+        if any(
+            isinstance(loop, bool) or not isinstance(loop, int) or loop <= 0
+            for loop in self.sampled_loops
+        ):
+            raise ValueError("sampled_loops must contain positive 1-based integers")
+        if len(set(self.sampled_loops)) != len(self.sampled_loops):
+            raise ValueError("sampled_loops must not contain duplicates")
+        if any(
+            isinstance(weight, bool)
+            or not isinstance(weight, int | float)
+            or not math.isfinite(weight)
+            or weight < 0
+            for weight in self.sampled_weights
+        ):
+            raise ValueError("sampled_weights must be finite and nonnegative")
+        if sum(self.sampled_weights) <= 0:
+            raise ValueError("at least one sampled-loop weight must be positive")
+        for name, value in (
+            ("sampled_loss_scale", self.sampled_loss_scale),
+            ("time_rope_regularization_scale", self.time_rope_regularization_scale),
+        ):
+            if not isinstance(value, int | float) or not 0 <= value < math.inf:
+                raise ValueError(f"{name} must be finite and nonnegative")
+        if not isinstance(self.label_smoothing, int | float) or not (
+            0 <= self.label_smoothing < 1
+        ):
+            raise ValueError("label_smoothing must be in [0, 1)")
 
     @classmethod
     def model_validate(cls, value: Any) -> Self:
-        raw = require_mapping(value, "last-loop loss options")
-        check_keys(raw, {"type", "mean_all_loops"}, {"time_rope_regularization_scale"})
-        if raw["type"] != "last_loop_cross_entropy":
-            raise ValueError("Expected loss type 'last_loop_cross_entropy'")
+        raw = require_mapping(value, "anchored sampled-loop loss options")
+        check_keys(
+            raw,
+            {
+                "type",
+                "sampled_loops",
+                "sampled_weights",
+                "sampled_loss_scale",
+            },
+            {"label_smoothing", "time_rope_regularization_scale"},
+        )
+        if raw["type"] != "anchored_sampled_loop_cross_entropy":
+            raise ValueError("Expected loss type 'anchored_sampled_loop_cross_entropy'")
+        loops = raw["sampled_loops"]
+        weights = raw["sampled_weights"]
+        if not isinstance(loops, list) or not isinstance(weights, list):
+            raise TypeError("sampled_loops and sampled_weights must be lists")
         return cls(
-            mean_all_loops=raw["mean_all_loops"],
+            sampled_loops=tuple(loops),
+            sampled_weights=tuple(weights),
+            sampled_loss_scale=raw["sampled_loss_scale"],
+            label_smoothing=raw.get("label_smoothing", 0.0),
             time_rope_regularization_scale=raw.get(
                 "time_rope_regularization_scale", 0.0
             ),
         )
 
 
-@dataclass(frozen=True, slots=True)
-class DepthWeightedLossOptions:
-    depth_weight_growth: float
-    monotonic_loss_scale: float
-
-    def __post_init__(self) -> None:
-        if self.depth_weight_growth < 0 or self.monotonic_loss_scale < 0:
-            raise ValueError("Depth-loss parameters must not be negative")
-
-    @classmethod
-    def model_validate(cls, value: Any) -> Self:
-        raw = require_mapping(value, "depth-weighted loss options")
-        check_keys(raw, {"type", "depth_weight_growth", "monotonic_loss_scale"})
-        if raw["type"] != "depth_weighted_cross_entropy":
-            raise ValueError("Expected loss type 'depth_weighted_cross_entropy'")
-        return cls(
-            depth_weight_growth=raw["depth_weight_growth"],
-            monotonic_loss_scale=raw["monotonic_loss_scale"],
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class OracleHaltingLossOptions:
-    compute_cost: float
-    target_temperature: float
-
-    def __post_init__(self) -> None:
-        if self.compute_cost < 0:
-            raise ValueError("compute_cost must not be negative")
-        if self.target_temperature <= 0:
-            raise ValueError("target_temperature must be positive")
-
-    @classmethod
-    def model_validate(cls, value: Any) -> Self:
-        raw = require_mapping(value, "oracle-halting loss options")
-        check_keys(raw, {"type", "compute_cost", "target_temperature"})
-        if raw["type"] != "oracle_halting":
-            raise ValueError("Expected loss type 'oracle_halting'")
-        return cls(
-            compute_cost=raw["compute_cost"],
-            target_temperature=raw["target_temperature"],
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class AdaptiveJointLossOptions:
-    compute_cost: float
-    target_temperature: float
-    controller_loss_scale: float
-    depth_loss_scale: float
-    depth_weight_growth: float
-    monotonic_loss_scale: float
-
-    def __post_init__(self) -> None:
-        nonnegative = (
-            self.compute_cost,
-            self.controller_loss_scale,
-            self.depth_loss_scale,
-            self.depth_weight_growth,
-            self.monotonic_loss_scale,
-        )
-        if any(value < 0 for value in nonnegative):
-            raise ValueError("Joint-loss scales must not be negative")
-        if self.target_temperature <= 0:
-            raise ValueError("target_temperature must be positive")
-
-    @classmethod
-    def model_validate(cls, value: Any) -> Self:
-        raw = require_mapping(value, "adaptive-joint loss options")
-        keys = {
-            "type",
-            "compute_cost",
-            "target_temperature",
-            "controller_loss_scale",
-            "depth_loss_scale",
-            "depth_weight_growth",
-            "monotonic_loss_scale",
-        }
-        check_keys(raw, keys)
-        if raw["type"] != "adaptive_joint":
-            raise ValueError("Expected loss type 'adaptive_joint'")
-        values = dict(raw)
-        values.pop("type")
-        return cls(**values)
-
-
-LossOptions = (
-    LoopedMNLILossOptions
-    | LastLoopLossOptions
-    | DepthWeightedLossOptions
-    | OracleHaltingLossOptions
-    | AdaptiveJointLossOptions
-)
+LossOptions = LoopedMNLILossOptions | AnchoredSampledLoopLossOptions
 
 
 def _load_loss_options(value: Any) -> LossOptions:
@@ -301,10 +254,7 @@ def _load_loss_options(value: Any) -> LossOptions:
     loss_type = raw.get("type", "ponder")
     option_types = {
         "ponder": LoopedMNLILossOptions,
-        "last_loop_cross_entropy": LastLoopLossOptions,
-        "depth_weighted_cross_entropy": DepthWeightedLossOptions,
-        "oracle_halting": OracleHaltingLossOptions,
-        "adaptive_joint": AdaptiveJointLossOptions,
+        "anchored_sampled_loop_cross_entropy": AnchoredSampledLoopLossOptions,
     }
     options_type = option_types.get(loss_type)
     if options_type is None:
@@ -418,28 +368,13 @@ def _build_loss(options: LossOptions) -> nn.Module:
             halt_scale=options.halting_loss_scale,
             aux_scale=options.auxiliary_loss_scale,
         )
-    if isinstance(options, LastLoopLossOptions):
-        return LastLoopCrossEntropyLoss(
-            options.mean_all_loops, options.time_rope_regularization_scale
-        )
-    if isinstance(options, DepthWeightedLossOptions):
-        return DepthWeightedCrossEntropyLoss(
-            depth_weight_growth=options.depth_weight_growth,
-            monotonic_loss_scale=options.monotonic_loss_scale,
-        )
-    if isinstance(options, OracleHaltingLossOptions):
-        return OracleHaltingLoss(
-            compute_cost=options.compute_cost,
-            target_temperature=options.target_temperature,
-        )
-    if isinstance(options, AdaptiveJointLossOptions):
-        return AdaptiveJointLoss(
-            compute_cost=options.compute_cost,
-            target_temperature=options.target_temperature,
-            controller_loss_scale=options.controller_loss_scale,
-            depth_loss_scale=options.depth_loss_scale,
-            depth_weight_growth=options.depth_weight_growth,
-            monotonic_loss_scale=options.monotonic_loss_scale,
+    if isinstance(options, AnchoredSampledLoopLossOptions):
+        return AnchoredSampledLoopCrossEntropyLoss(
+            sampled_loops=options.sampled_loops,
+            sampled_weights=options.sampled_weights,
+            sampled_loss_scale=options.sampled_loss_scale,
+            label_smoothing=options.label_smoothing,
+            time_rope_regularization_scale=options.time_rope_regularization_scale,
         )
     raise TypeError(f"Unsupported loss options: {type(options).__name__}")
 

@@ -25,7 +25,6 @@ class MNLIDataReader:
             DataSplit.EVAL: data_options.eval_file_path,
         }
 
-        # todo: thread safety?
         self._examples_count: dict[DataSplit, int] = {}
 
     def get_batches_iterator(

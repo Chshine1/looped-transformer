@@ -6,6 +6,7 @@ import yaml
 
 from looped_transformer.config.data import DataOptions
 from looped_transformer.config.model import (
+    DropoutOptions,
     EvaluationOptions,
     HaltingOptions,
     ModelOptions,
@@ -38,7 +39,7 @@ def load_options(path: str | Path) -> AppOptions:
             output_classes_count=model_options["output_classes_count"],
             max_iterations=model_options["max_iterations"],
             max_sequence_length=model_options["max_sequence_length"],
-            dropout=model_options["dropout"],
+            dropout=DropoutOptions.model_validate(model_options["dropout"]),
             transformer=TransformerOptions(**model_options["transformer"]),
             halting=HaltingOptions(**model_options["halting"]),
             training=TrainingOptions.model_validate(model_options["training"]),

@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 
 import torch
+from torch.nn import functional
 
 from looped_transformer.checkpoint_manager import (
     CheckpointComponents,
@@ -262,16 +263,26 @@ class MNLIRunner:
         )
         should_save = state.epoch % stage.save_every_epochs == 0
 
-        if should_save:
-            checkpoint_manager.save_epoch(state, components)
-
         if should_evaluate:
-            accuracy = self.eval()
-            print(f"epoch={state.epoch} validation_accuracy={accuracy:.4%}")
+            policy = self.eval_policy_metrics()
+            accuracy = policy["accuracy"]
+            loop_cross_entropy, loop_accuracy = self.eval_loop_metrics()
+            ce_values = ",".join(f"{value:.4f}" for value in loop_cross_entropy)
+            accuracy_values = ",".join(f"{value:.4%}" for value in loop_accuracy)
+            print(
+                f"epoch={state.epoch} validation_accuracy={accuracy:.4%} "
+                f"validation_loop_ce=[{ce_values}] "
+                f"validation_loop_accuracy=[{accuracy_values}] "
+                f"validation_mean_iterations={policy['mean_iterations']:.4f} "
+                f"validation_iteration_counts={policy['iteration_counts']}"
+            )
 
             if accuracy > state.best_accuracy:
                 state.best_accuracy = accuracy
                 checkpoint_manager.save_best(state, components)
+
+        if should_save:
+            checkpoint_manager.save_epoch(state, components)
 
     def _get_accumulation_window(
         self, batch_index: int, stage: StageTemplate
@@ -286,7 +297,10 @@ class MNLIRunner:
         window_end = min(window_start + accumulation_steps, batches_count)
         return window_start, window_end
 
-    def eval(self) -> float:
+    def eval(self, *, force_all_loops: bool = False) -> float:
+        if not force_all_loops:
+            return self.eval_policy_metrics()["accuracy"]
+
         correct = 0
         total = 0
         training_modes = [(module, module.training) for module in self._model.modules()]
@@ -303,11 +317,21 @@ class MNLIRunner:
                 attention_mask = encoding.attention_mask.to(self._device)
 
                 with torch.inference_mode(), self._autocast():
-                    output: ModelEvalOutput = self._model(input_ids, attention_mask)
+                    output = self._model(
+                        input_ids,
+                        attention_mask,
+                        force_all_loops=force_all_loops,
+                    )
+
+                logits = (
+                    output["timed_logits"][-1]
+                    if output["mode"] == "train"
+                    else output["logits"]
+                )
 
                 predictions = tuple(
                     LogicRelation(prediction.item())
-                    for prediction in output["logits"].argmax(dim=-1)
+                    for prediction in logits.argmax(dim=-1)
                 )
                 targets = [get_logic_relation(label) for label in batch.labels]
 
@@ -323,3 +347,111 @@ class MNLIRunner:
         if total == 0:
             raise ValueError("Evaluation data contains no recognized labels")
         return correct / total
+
+    def eval_policy_metrics(self) -> dict:
+        correct = 0
+        total = 0
+        iteration_sum = 0
+        iteration_counts = [0] * self._model_options.max_iterations
+        training_modes = [(module, module.training) for module in self._model.modules()]
+
+        try:
+            self._model.eval()
+            for batch in self._data_reader.get_batches_iterator(
+                DataSplit.EVAL,
+                shuffle=False,
+            ):
+                encoding = self._tokenizer.encode(batch.premises, batch.hypotheses)
+                input_ids = encoding.input_ids.to(self._device)
+                attention_mask = encoding.attention_mask.to(self._device)
+                with torch.inference_mode(), self._autocast():
+                    output: ModelEvalOutput = self._model(input_ids, attention_mask)
+
+                predictions = output["logits"].argmax(dim=-1)
+                targets = torch.tensor(
+                    [get_logic_relation(label).value for label in batch.labels],
+                    dtype=torch.long,
+                    device=self._device,
+                )
+                iterations = output["iterations"]
+                correct += (predictions == targets).sum().item()
+                total += targets.numel()
+                iteration_sum += iterations.sum().item()
+                counts = torch.bincount(
+                    iterations,
+                    minlength=self._model_options.max_iterations + 1,
+                )[1:]
+                for index, count in enumerate(counts.cpu().tolist()):
+                    iteration_counts[index] += count
+        finally:
+            for module, training in training_modes:
+                module.train(training)
+
+        if total == 0:
+            raise ValueError("Evaluation data contains no recognized labels")
+        return {
+            "accuracy": correct / total,
+            "mean_iterations": iteration_sum / total,
+            "iteration_counts": iteration_counts,
+        }
+
+    def eval_loop_metrics(
+        self,
+        split: DataSplit = DataSplit.EVAL,
+        *,
+        log_every_batches: int | None = None,
+    ) -> tuple[list[float], list[float]]:
+        loop_count = self._model_options.max_iterations
+        cross_entropy_sum = torch.zeros(loop_count, dtype=torch.float64)
+        correct = torch.zeros(loop_count, dtype=torch.int64)
+        total = 0
+        training_modes = [(module, module.training) for module in self._model.modules()]
+
+        try:
+            self._model.eval()
+            for batch_index, batch in enumerate(
+                self._data_reader.get_batches_iterator(
+                    split,
+                    shuffle=False,
+                )
+            ):
+                encoding = self._tokenizer.encode(batch.premises, batch.hypotheses)
+                input_ids = encoding.input_ids.to(self._device)
+                attention_mask = encoding.attention_mask.to(self._device)
+                labels = torch.tensor(
+                    [get_logic_relation(label).value for label in batch.labels],
+                    dtype=torch.long,
+                    device=self._device,
+                )
+
+                with torch.inference_mode(), self._autocast():
+                    output: ModelTrainOutput = self._model(
+                        input_ids, attention_mask, force_all_loops=True
+                    )
+                logits = output["timed_logits"].float()
+                for loop in range(loop_count):
+                    cross_entropy_sum[loop] += (
+                        functional.cross_entropy(logits[loop], labels, reduction="sum")
+                        .double()
+                        .cpu()
+                    )
+                    correct[loop] += (logits[loop].argmax(-1) == labels).sum().cpu()
+                total += labels.numel()
+                if (
+                    log_every_batches is not None
+                    and (batch_index + 1) % log_every_batches == 0
+                ):
+                    print(
+                        f"Evaluated {total:,} {split.value} examples...",
+                        flush=True,
+                    )
+        finally:
+            for module, training in training_modes:
+                module.train(training)
+
+        if total == 0:
+            raise ValueError("Evaluation data contains no recognized labels")
+        return (
+            (cross_entropy_sum / total).tolist(),
+            (correct.double() / total).tolist(),
+        )
