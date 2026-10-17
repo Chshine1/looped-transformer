@@ -39,7 +39,7 @@ class SwiGLUTransformerBlock(nn.Module):
         self._down_transform = nn.Linear(ffn_dimension, model_dimension, bias=False)
 
         self._dropout2 = nn.Dropout(residual_dropout)
-        self._batch_dropout1 = BatchDropout(stochastic_depth)
+        self._batch_dropout2 = BatchDropout(stochastic_depth)
         self._attention_residual_scale = ResidualScale()
         self._ffn_residual_scale = ResidualScale()
 
@@ -58,6 +58,6 @@ class SwiGLUTransformerBlock(nn.Module):
         up = self._up_transform(hidden_state)
         ffn = self._down_transform(self._swi_glu_dropout(gate * up))
 
-        return hidden_state + self._batch_dropout1(
+        return hidden_state + self._batch_dropout2(
             residue_scale * self._ffn_residual_scale() * self._dropout2(ffn)
         )

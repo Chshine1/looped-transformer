@@ -3,8 +3,6 @@ from torch import Tensor, nn
 
 
 class BatchDropout(nn.Module):
-    """Drop a complete residual branch independently for each batch example."""
-
     def __init__(self, probability: float = 0.0):
         super().__init__()
         if not 0 <= probability < 1:

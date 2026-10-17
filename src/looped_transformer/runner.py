@@ -6,7 +6,6 @@ from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 
 import torch
-from torch.nn import functional
 
 from looped_transformer.checkpoint_manager import (
     CheckpointComponents,
@@ -17,12 +16,11 @@ from looped_transformer.config.data import DataOptions
 from looped_transformer.config.model import ModelOptions
 from looped_transformer.config.runtime import RuntimeOptions
 from looped_transformer.data_reader import MNLIDataReader
-from looped_transformer.modules.loss import get_loop_metrics
 from looped_transformer.modules.model import LoopedMNLI
 from looped_transformer.tokenizer import MNLITokenizer
 from looped_transformer.types.data import DataSplit
-from looped_transformer.types.mnli import LogicRelation, get_logic_relation
-from looped_transformer.types.model import ModelEvalOutput, ModelTrainOutput
+from looped_transformer.types.mnli import get_logic_relation
+from looped_transformer.types.model import ModelTrainOutput
 from looped_transformer.types.train import StageTemplate, TrainingState
 from looped_transformer.utils.torch import resolve_device, resolve_dtype
 
@@ -133,10 +131,6 @@ class MNLIRunner:
             components.scheduler,
             components.scaler,
         )
-        logged_loss_sum = 0.0
-        logged_batches = 0
-        logged_loop_cross_entropy: torch.Tensor | None = None
-        logged_expected_iterations: torch.Tensor | None = None
 
         for batch_index, batch in enumerate(
             stage.data_reader.get_batches_iterator(
@@ -160,18 +154,6 @@ class MNLIRunner:
                 output: ModelTrainOutput = self._model(input_ids, attention_mask)
                 loss = stage.loss(output, label_tensor)
                 scaled_loss = loss / (acc_window_end - acc_window_start)
-            logged_loss_sum += loss.detach().item()
-            logged_batches += 1
-            with torch.no_grad():
-                batch_loop_cross_entropy, batch_expected_iterations = get_loop_metrics(
-                    output, label_tensor
-                )
-            if logged_loop_cross_entropy is None:
-                logged_loop_cross_entropy = torch.zeros_like(batch_loop_cross_entropy)
-                logged_expected_iterations = torch.zeros_like(batch_expected_iterations)
-            assert logged_expected_iterations is not None
-            logged_loop_cross_entropy += batch_loop_cross_entropy
-            logged_expected_iterations += batch_expected_iterations
             scaler.scale(scaled_loss).backward()
 
             if batch_index + 1 != acc_window_end:
@@ -193,28 +175,10 @@ class MNLIRunner:
             scheduler.step()
             state.global_step += 1
             if state.global_step % self._model_options.training.log_every_steps == 0:
-                if (
-                    logged_loop_cross_entropy is None
-                    or logged_expected_iterations is None
-                ):
-                    raise RuntimeError("Training metric accumulator is empty")
-                loop_cross_entropy = logged_loop_cross_entropy / logged_batches
-                expected_iterations = logged_expected_iterations / logged_batches
-                loop_values = ",".join(
-                    f"{value:.3f}"
-                    for value in loop_cross_entropy.detach().cpu().tolist()
-                )
                 print(
                     f"epoch={state.epoch + 1} step={state.global_step} "
-                    f"mean_loss={logged_loss_sum / logged_batches:.4f} "
-                    f"loop_ce=[{loop_values}] "
-                    f"expected_iterations={expected_iterations.item():.3f} "
                     f"lr={scheduler.get_last_lr()[0]:.3e}"
                 )
-                logged_loss_sum = 0.0
-                logged_batches = 0
-                logged_loop_cross_entropy = None
-                logged_expected_iterations = None
 
     def _on_stage_begin(
         self, stage: StageTemplate, state: TrainingState
@@ -251,35 +215,14 @@ class MNLIRunner:
 
         return components
 
+    @staticmethod
     def _on_epoch_end(
-        self,
         stage: StageTemplate,
         state: TrainingState,
         components: CheckpointComponents,
         checkpoint_manager: CheckpointManager,
     ) -> None:
-        should_evaluate = (
-            state.epoch % self._model_options.evaluation.evaluate_every_epochs == 0
-        )
         should_save = state.epoch % stage.save_every_epochs == 0
-
-        if should_evaluate:
-            policy = self.eval_policy_metrics()
-            accuracy = policy["accuracy"]
-            loop_cross_entropy, loop_accuracy = self.eval_loop_metrics()
-            ce_values = ",".join(f"{value:.4f}" for value in loop_cross_entropy)
-            accuracy_values = ",".join(f"{value:.4%}" for value in loop_accuracy)
-            print(
-                f"epoch={state.epoch} validation_accuracy={accuracy:.4%} "
-                f"validation_loop_ce=[{ce_values}] "
-                f"validation_loop_accuracy=[{accuracy_values}] "
-                f"validation_mean_iterations={policy['mean_iterations']:.4f} "
-                f"validation_iteration_counts={policy['iteration_counts']}"
-            )
-
-            if accuracy > state.best_accuracy:
-                state.best_accuracy = accuracy
-                checkpoint_manager.save_best(state, components)
 
         if should_save:
             checkpoint_manager.save_epoch(state, components)
@@ -296,162 +239,3 @@ class MNLIRunner:
         window_start = (batch_index // accumulation_steps) * accumulation_steps
         window_end = min(window_start + accumulation_steps, batches_count)
         return window_start, window_end
-
-    def eval(self, *, force_all_loops: bool = False) -> float:
-        if not force_all_loops:
-            return self.eval_policy_metrics()["accuracy"]
-
-        correct = 0
-        total = 0
-        training_modes = [(module, module.training) for module in self._model.modules()]
-
-        try:
-            self._model.eval()
-
-            for batch in self._data_reader.get_batches_iterator(
-                DataSplit.EVAL,
-                shuffle=False,
-            ):
-                encoding = self._tokenizer.encode(batch.premises, batch.hypotheses)
-                input_ids = encoding.input_ids.to(self._device)
-                attention_mask = encoding.attention_mask.to(self._device)
-
-                with torch.inference_mode(), self._autocast():
-                    output = self._model(
-                        input_ids,
-                        attention_mask,
-                        force_all_loops=force_all_loops,
-                    )
-
-                logits = (
-                    output["timed_logits"][-1]
-                    if output["mode"] == "train"
-                    else output["logits"]
-                )
-
-                predictions = tuple(
-                    LogicRelation(prediction.item())
-                    for prediction in logits.argmax(dim=-1)
-                )
-                targets = [get_logic_relation(label) for label in batch.labels]
-
-                correct += sum(
-                    prediction == target
-                    for prediction, target in zip(predictions, targets, strict=True)
-                )
-                total += len(targets)
-        finally:
-            for module, training in training_modes:
-                module.train(training)
-
-        if total == 0:
-            raise ValueError("Evaluation data contains no recognized labels")
-        return correct / total
-
-    def eval_policy_metrics(self) -> dict:
-        correct = 0
-        total = 0
-        iteration_sum = 0
-        iteration_counts = [0] * self._model_options.max_iterations
-        training_modes = [(module, module.training) for module in self._model.modules()]
-
-        try:
-            self._model.eval()
-            for batch in self._data_reader.get_batches_iterator(
-                DataSplit.EVAL,
-                shuffle=False,
-            ):
-                encoding = self._tokenizer.encode(batch.premises, batch.hypotheses)
-                input_ids = encoding.input_ids.to(self._device)
-                attention_mask = encoding.attention_mask.to(self._device)
-                with torch.inference_mode(), self._autocast():
-                    output: ModelEvalOutput = self._model(input_ids, attention_mask)
-
-                predictions = output["logits"].argmax(dim=-1)
-                targets = torch.tensor(
-                    [get_logic_relation(label).value for label in batch.labels],
-                    dtype=torch.long,
-                    device=self._device,
-                )
-                iterations = output["iterations"]
-                correct += (predictions == targets).sum().item()
-                total += targets.numel()
-                iteration_sum += iterations.sum().item()
-                counts = torch.bincount(
-                    iterations,
-                    minlength=self._model_options.max_iterations + 1,
-                )[1:]
-                for index, count in enumerate(counts.cpu().tolist()):
-                    iteration_counts[index] += count
-        finally:
-            for module, training in training_modes:
-                module.train(training)
-
-        if total == 0:
-            raise ValueError("Evaluation data contains no recognized labels")
-        return {
-            "accuracy": correct / total,
-            "mean_iterations": iteration_sum / total,
-            "iteration_counts": iteration_counts,
-        }
-
-    def eval_loop_metrics(
-        self,
-        split: DataSplit = DataSplit.EVAL,
-        *,
-        log_every_batches: int | None = None,
-    ) -> tuple[list[float], list[float]]:
-        loop_count = self._model_options.max_iterations
-        cross_entropy_sum = torch.zeros(loop_count, dtype=torch.float64)
-        correct = torch.zeros(loop_count, dtype=torch.int64)
-        total = 0
-        training_modes = [(module, module.training) for module in self._model.modules()]
-
-        try:
-            self._model.eval()
-            for batch_index, batch in enumerate(
-                self._data_reader.get_batches_iterator(
-                    split,
-                    shuffle=False,
-                )
-            ):
-                encoding = self._tokenizer.encode(batch.premises, batch.hypotheses)
-                input_ids = encoding.input_ids.to(self._device)
-                attention_mask = encoding.attention_mask.to(self._device)
-                labels = torch.tensor(
-                    [get_logic_relation(label).value for label in batch.labels],
-                    dtype=torch.long,
-                    device=self._device,
-                )
-
-                with torch.inference_mode(), self._autocast():
-                    output: ModelTrainOutput = self._model(
-                        input_ids, attention_mask, force_all_loops=True
-                    )
-                logits = output["timed_logits"].float()
-                for loop in range(loop_count):
-                    cross_entropy_sum[loop] += (
-                        functional.cross_entropy(logits[loop], labels, reduction="sum")
-                        .double()
-                        .cpu()
-                    )
-                    correct[loop] += (logits[loop].argmax(-1) == labels).sum().cpu()
-                total += labels.numel()
-                if (
-                    log_every_batches is not None
-                    and (batch_index + 1) % log_every_batches == 0
-                ):
-                    print(
-                        f"Evaluated {total:,} {split.value} examples...",
-                        flush=True,
-                    )
-        finally:
-            for module, training in training_modes:
-                module.train(training)
-
-        if total == 0:
-            raise ValueError("Evaluation data contains no recognized labels")
-        return (
-            (cross_entropy_sum / total).tolist(),
-            (correct.double() / total).tolist(),
-        )

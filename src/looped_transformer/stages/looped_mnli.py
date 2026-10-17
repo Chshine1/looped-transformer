@@ -19,7 +19,6 @@ from looped_transformer.config.training import (
 from looped_transformer.data_reader import MNLIDataReader
 from looped_transformer.modules.loss import (
     AnchoredSampledLoopCrossEntropyLoss,
-    LoopedMNLILoss,
 )
 from looped_transformer.stages.registry import register_stage
 from looped_transformer.types.data import DataSplit
@@ -141,39 +140,6 @@ def _load_scheduler_options(value: Any) -> SchedulerOptions:
 
 
 @dataclass(frozen=True, slots=True)
-class LoopedMNLILossOptions:
-    expected_halting_time: int
-    halting_loss_scale: float
-    auxiliary_loss_scale: float
-
-    def __post_init__(self) -> None:
-        if self.expected_halting_time <= 0:
-            raise ValueError("expected_halting_time must be positive")
-        if self.halting_loss_scale < 0 or self.auxiliary_loss_scale < 0:
-            raise ValueError("loss scales must not be negative")
-
-    @classmethod
-    def model_validate(cls, value: Any) -> Self:
-        raw = require_mapping(value, "looped MNLI loss options")
-        check_keys(
-            raw,
-            {
-                "expected_halting_time",
-                "halting_loss_scale",
-                "auxiliary_loss_scale",
-            },
-            {"type"},
-        )
-        if raw.get("type", "ponder") != "ponder":
-            raise ValueError("Expected loss type 'ponder'")
-        return cls(
-            expected_halting_time=raw["expected_halting_time"],
-            halting_loss_scale=raw["halting_loss_scale"],
-            auxiliary_loss_scale=raw["auxiliary_loss_scale"],
-        )
-
-
-@dataclass(frozen=True, slots=True)
 class AnchoredSampledLoopLossOptions:
     sampled_loops: tuple[int, ...]
     sampled_weights: tuple[float, ...]
@@ -246,14 +212,13 @@ class AnchoredSampledLoopLossOptions:
         )
 
 
-LossOptions = LoopedMNLILossOptions | AnchoredSampledLoopLossOptions
+LossOptions = AnchoredSampledLoopLossOptions
 
 
 def _load_loss_options(value: Any) -> LossOptions:
     raw = require_mapping(value, "loss options")
     loss_type = raw.get("type", "ponder")
     option_types = {
-        "ponder": LoopedMNLILossOptions,
         "anchored_sampled_loop_cross_entropy": AnchoredSampledLoopLossOptions,
     }
     options_type = option_types.get(loss_type)
@@ -362,12 +327,6 @@ def _build_stage_template(
 
 
 def _build_loss(options: LossOptions) -> nn.Module:
-    if isinstance(options, LoopedMNLILossOptions):
-        return LoopedMNLILoss(
-            expected_time=options.expected_halting_time,
-            halt_scale=options.halting_loss_scale,
-            aux_scale=options.auxiliary_loss_scale,
-        )
     if isinstance(options, AnchoredSampledLoopLossOptions):
         return AnchoredSampledLoopCrossEntropyLoss(
             sampled_loops=options.sampled_loops,
