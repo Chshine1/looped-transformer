@@ -7,8 +7,8 @@ import torch
 from torch import nn
 
 from looped_transformer.artifacts import get_run_output_dir, write_manifest
+from looped_transformer.config import CommonDataOptions
 from looped_transformer.config import (
-    DataOptions,
     ModelOptions,
     RuntimeOptions,
 )
@@ -114,7 +114,7 @@ class CheckpointManagerFactory:
     def __init__(
         self,
         model_options: ModelOptions,
-        data_options: DataOptions,
+        data_options: CommonDataOptions,
         runtime_options: RuntimeOptions,
     ) -> None:
         self._model_options = model_options

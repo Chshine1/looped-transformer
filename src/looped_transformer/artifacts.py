@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from looped_transformer.config.data import CommonDataOptions
 import hashlib
 import json
 import uuid
@@ -65,24 +65,18 @@ def get_file_fingerprint(path: str | Path) -> dict[str, Any]:
     }
 
 
-def _get_run_artifact_spec(runtime: Any, data: Any, model: Any) -> dict:
-    data_config = data.model_dump()
-    data_config.pop("output_dir", None)
-    data_config.pop("shuffle_cache_dir", None)
-    data_config.pop("file_path", None)
-    data_config["source"] = get_file_fingerprint(data.file_path)
+def _get_run_artifact_spec(runtime: Any, model: Any) -> dict:
     return {
         "format": "looped-transformer-training-v1",
         "runtime": runtime,
-        "data": data_config,
         "model": model,
     }
 
 
 def get_run_output_dir(
-    runtime: RuntimeOptions, data: DataOptions, model: ModelOptions
+    runtime: RuntimeOptions, data: CommonDataOptions, model: ModelOptions
 ) -> tuple[Path, str, dict]:
-    spec = _get_run_artifact_spec(runtime, data, model)
+    spec = _get_run_artifact_spec(runtime, model)
     identifier = get_artifact_id(spec)
     return Path(data.output_dir) / identifier, identifier, spec
 

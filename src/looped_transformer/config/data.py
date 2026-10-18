@@ -7,11 +7,14 @@ from looped_transformer.config.base import (
 )
 
 
+class CommonDataOptions(OptionsModel):
+    output_dir: ConfigPath
+
+
 class DataOptions(OptionsModel):
     seed: NonNegativeInt
 
     file_path: ConfigPath
-    output_dir: ConfigPath
 
     batch_size: PositiveInt
     premise_column: NonEmptyString

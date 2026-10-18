@@ -12,10 +12,8 @@ from looped_transformer.checkpoint_manager import (
     CheckpointManager,
     CheckpointManagerFactory,
 )
-from looped_transformer.config.data import DataOptions
 from looped_transformer.config.model import ModelOptions
 from looped_transformer.config.runtime import RuntimeOptions
-from looped_transformer.data_reader import MNLIDataReader
 from looped_transformer.modules.model import LoopedMNLI
 from looped_transformer.tokenizer import MNLITokenizer
 from looped_transformer.types.mnli import get_logic_relation
@@ -29,16 +27,12 @@ class MNLIRunner:
         self,
         tokenizer: MNLITokenizer,
         checkpoint_manager_factory: CheckpointManagerFactory,
-        data_reader: MNLIDataReader,
         model_options: ModelOptions,
-        data_options: DataOptions,
         runtime_options: RuntimeOptions,
     ):
         self._checkpoint_manager_factory = checkpoint_manager_factory
-        self._data_reader = data_reader
 
         self._model_options = model_options
-        self._data_options = data_options
         self._runtime_options = runtime_options
         self._device = resolve_device(runtime_options)
         self._parameter_dtype = resolve_dtype(runtime_options.dtype)
@@ -146,7 +140,7 @@ class MNLIRunner:
                 device=self._device,
             )
             acc_window_start, acc_window_end = self._get_accumulation_window(
-                batch_index, stage
+                stage.data_reader.batch_size, batch_index, stage
             )
             with self._autocast():
                 output: ModelTrainOutput = self._model(input_ids, attention_mask)
@@ -226,12 +220,10 @@ class MNLIRunner:
             checkpoint_manager.save_epoch(state, components)
 
     def _get_accumulation_window(
-        self, batch_index: int, stage: StageTemplate
+        self, batch_size: int, batch_index: int, stage: StageTemplate
     ) -> tuple[int, int]:
         accumulation_steps = stage.gradient_accumulation_steps
-        batches_count = math.ceil(
-            stage.data_reader.count_examples() / self._data_options.batch_size
-        )
+        batches_count = math.ceil(stage.data_reader.count_examples() / batch_size)
 
         window_start = (batch_index // accumulation_steps) * accumulation_steps
         window_end = min(window_start + accumulation_steps, batches_count)

@@ -1,6 +1,6 @@
 [project]
 authors = [{ name = "Chshine1", email = "chshine@qq.com" }]
-dependencies = ["pydantic>=2.14.1,<3", "pyyaml>=6.0", "torch"]
+dependencies = ["pydantic>=2.14.1,<3", "pyyaml>=6.0", "torch", "hydra-core>=1.3.7,<2"]
 name = "looped-transformer"
 requires-python = ">= 3.12"
 version = "0.1.0"
@@ -50,7 +50,7 @@ pandas = ">=3.0.6,<4"
 types-pyyaml = ">=6.0.12.20260906,<7"
 
 [tool.pyrefly]
-project-includes = ["src"]
+project-includes = ["src", "tests"]
 project-excludes = [
     "**/__pycache__",
     ".pixi",
@@ -75,4 +75,3 @@ format = "python -m ruff format ."
 clean-data = "python scripts/clean_mnli.py data/mnli_train.tsv data/mnli_matched.tsv data/mnli_mismatched.tsv"
 test = "python -m unittest discover -s tests -v"
 train = "python -m looped_transformer.main --config config.yaml train"
-analyze = "python -m looped_transformer.main --config config.yaml analyze --checkpoint outputs/mean_ce/backbone_warmup/checkpoint-epoch-1.pt"

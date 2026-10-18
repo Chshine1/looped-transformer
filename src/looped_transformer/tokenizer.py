@@ -8,13 +8,12 @@ from transformers import TensorType
 from transformers.models.bert.tokenization_bert import BertTokenizerFast
 from transformers.utils import PaddingStrategy
 
-from looped_transformer.config import ModelOptions
 from looped_transformer.types.tokenizer import TokenizeResult, TokenizerInfo
 
 
 class MNLITokenizer:
-    def __init__(self, model_options: ModelOptions):
-        self._model_options = model_options
+    def __init__(self, max_sequence_length: int) -> None:
+        self._max_sequence_length = max_sequence_length
         offline = os.environ.get("HF_HUB_OFFLINE", "").lower() in {
             "1",
             "true",
@@ -45,7 +44,7 @@ class MNLITokenizer:
             text_pair=hypotheses,
             padding=PaddingStrategy.MAX_LENGTH,
             truncation=True,
-            max_length=self._model_options.max_sequence_length,
+            max_length=self._max_sequence_length,
             return_tensors=TensorType.PYTORCH,
         )
         return TokenizeResult(

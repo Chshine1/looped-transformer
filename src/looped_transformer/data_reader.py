@@ -171,3 +171,7 @@ class MNLIDataReader:
             raise
 
         return [cache_dir / name for name in chunk_names]
+
+    @property
+    def batch_size(self):
+        return self._data_options.batch_size

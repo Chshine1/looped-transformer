@@ -1,7 +1,10 @@
+from looped_transformer.config.data import CommonDataOptions
+from typing import cast
 from pathlib import Path
 from typing import Any
 
-import yaml
+from hydra import initialize_config_dir, compose
+from omegaconf import DictConfig, OmegaConf
 
 from looped_transformer.config.base import OptionsModel
 from looped_transformer.config.data import DataOptions
@@ -11,15 +14,28 @@ from looped_transformer.config.runtime import RuntimeOptions
 
 class AppOptions(OptionsModel):
     runtime: RuntimeOptions
-    data: DataOptions
+    data: CommonDataOptions
     model: ModelOptions
 
 
-def load_options(path: str | Path) -> AppOptions:
+def load_options(
+    config_dir: str,
+    overrides: list[str],
+) -> AppOptions:
     from looped_transformer.stages import ensure_builtin_stages_registered
 
     ensure_builtin_stages_registered()
-    with Path(path).open(encoding="utf-8") as stream:
-        raw: dict[str, Any] = yaml.safe_load(stream)
 
+    with initialize_config_dir(
+        version_base=None,
+        config_dir=str(Path(config_dir).resolve()),
+    ):
+        cfg: DictConfig = compose(
+            config_name="config",
+            overrides=overrides,
+        )
+
+    raw: dict[str, Any] = cast(
+        dict[str, Any], OmegaConf.to_container(cfg, resolve=True)
+    )
     return AppOptions.model_validate(raw)

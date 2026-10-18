@@ -1,3 +1,6 @@
+data:
+  output_dir: outputs
+
 runtime:
   device: cuda
   cuda_device_index: 0
@@ -47,7 +50,6 @@ model:
           data:
             seed: 42
             file_path: data/mnli_train.tsv
-            output_dir: outputs
             batch_size: 256
             premise_column: sentence1
             hypothesis_column: sentence2
