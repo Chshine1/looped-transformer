@@ -11,29 +11,23 @@ import pandas as pd
 
 from looped_transformer.artifacts import get_artifact_id, get_file_fingerprint
 from looped_transformer.config import DataOptions, RuntimeOptions
-from looped_transformer.types.data import DataSplit, MNLIBatch
+from looped_transformer.types.data import MNLIBatch
 
 
 class MNLIDataReader:
     CACHE_FORMAT = "mnli-shuffle-chunks-v1"
 
-    def __init__(self, runtime_options: RuntimeOptions, data_options: DataOptions):
-        self._runtime_options = runtime_options
+    def __init__(self, data_options: DataOptions):
         self._data_options = data_options
-        self._paths = {
-            DataSplit.TRAIN: data_options.train_file_path,
-            DataSplit.EVAL: data_options.eval_file_path,
-        }
+        self._path = data_options.file_path
 
-        self._examples_count: dict[DataSplit, int] = {}
+        self._examples_count: int | None = None
 
     def get_batches_iterator(
         self,
-        split: DataSplit,
         shuffle: bool = True,
         seed: int | None = None,
     ) -> Iterator[MNLIBatch]:
-        path = self._paths[split]
         columns = [
             self._data_options.premise_column,
             self._data_options.hypothesis_column,
@@ -43,7 +37,7 @@ class MNLIDataReader:
         if not shuffle:
             # noinspection argument-list
             reader = pd.read_csv(
-                path,
+                self._path,
                 sep="\t",
                 dtype=str,
                 usecols=columns,
@@ -53,8 +47,8 @@ class MNLIDataReader:
                 yield self._to_batch(chunk)
             return
 
-        chunk_paths = self._prepare_shuffle_chunks(split)
-        rng = random.Random(self._runtime_options.seed if seed is None else seed)
+        chunk_paths = self._prepare_shuffle_chunks()
+        rng = random.Random(self._data_options.seed if seed is None else seed)
         rng.shuffle(chunk_paths)
 
         pending = pd.DataFrame()
@@ -78,24 +72,22 @@ class MNLIDataReader:
         if not pending.empty:
             yield self._to_batch(pending)
 
-    def count_examples(self, split: DataSplit) -> int:
-        existing_count = self._examples_count.get(split, None)
-        if existing_count is not None:
-            return existing_count
+    def count_examples(self) -> int:
+        if self._examples_count is not None:
+            return self._examples_count
 
-        path = self._paths[split]
         label_col = self._data_options.label_column
 
         # noinspection argument-list
         chunks = pd.read_csv(
-            path,
+            self._path,
             sep="\t",
             dtype=str,
             usecols=[label_col],
             chunksize=100_000,
         )
         count = sum(len(chunk) for chunk in chunks)
-        self._examples_count[split] = count
+        self._examples_count = count
         return count
 
     def _to_batch(self, df) -> MNLIBatch:
@@ -105,11 +97,10 @@ class MNLIDataReader:
             labels=tuple(df[self._data_options.label_column].tolist()),
         )
 
-    def _shuffle_spec(self, split: DataSplit) -> dict:
-        path = self._paths[split]
+    def _shuffle_spec(self) -> dict:
         return {
             "format": self.CACHE_FORMAT,
-            "source": get_file_fingerprint(path),
+            "source": get_file_fingerprint(self._path),
             "columns": [
                 self._data_options.premise_column,
                 self._data_options.hypothesis_column,
@@ -118,8 +109,8 @@ class MNLIDataReader:
             "chunk_size": self._data_options.shuffle_chunk_size,
         }
 
-    def _prepare_shuffle_chunks(self, split: DataSplit) -> list[Path]:
-        spec = self._shuffle_spec(split)
+    def _prepare_shuffle_chunks(self) -> list[Path]:
+        spec = self._shuffle_spec()
         identifier = get_artifact_id(spec)
         cache_dir = Path(self._data_options.shuffle_cache_dir) / identifier
         manifest_path = cache_dir / "manifest.json"
@@ -148,7 +139,7 @@ class MNLIDataReader:
         try:
             # noinspection argument-list
             reader = pd.read_csv(
-                self._paths[split],
+                self._path,
                 sep="\t",
                 dtype=str,
                 usecols=spec["columns"],
@@ -174,7 +165,7 @@ class MNLIDataReader:
         except FileExistsError:
             # Another process completed the identical cache first.
             shutil.rmtree(temporary, ignore_errors=True)
-            return self._prepare_shuffle_chunks(split)
+            return self._prepare_shuffle_chunks()
         except BaseException:
             shutil.rmtree(temporary, ignore_errors=True)
             raise

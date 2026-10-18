@@ -7,21 +7,16 @@ from looped_transformer.types.train import StageTemplate
 
 
 def ensure_builtin_stages_registered() -> None:
-    """Import built-in stage modules for their one-time registrations."""
     assert looped_mnli is not None
 
 
 def build_stage_templates(
     options: TrainingOptions,
-    data_reader: MNLIDataReader,
-    data_options: DataOptions,
 ) -> list[StageTemplate]:
     return [
         build_stage_template(
             template_id,
             options.stage_templates[template_id],
-            data_reader,
-            data_options,
         )
         for template_id in options.stages
     ]

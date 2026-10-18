@@ -8,17 +8,6 @@ runtime:
   allow_tf32: true
   deterministic: false
 
-data:
-  train_file_path: data/mnli_train.tsv
-  eval_file_path: data/mnli_matched.tsv
-  output_dir: outputs
-  batch_size: 256
-  premise_column: sentence1
-  hypothesis_column: sentence2
-  label_column: gold_label
-  shuffle_cache_dir: data/shuffled
-  shuffle_chunk_size: 10000
-
 model:
   hidden_state_dimension: 256
   output_classes_count: 3
@@ -55,6 +44,16 @@ model:
           max_gradient_norm: 1.0
           gradient_accumulation_steps: 1
           save_every_epochs: 1
+          data:
+            seed: 42
+            file_path: data/mnli_train.tsv
+            output_dir: outputs
+            batch_size: 256
+            premise_column: sentence1
+            hypothesis_column: sentence2
+            label_column: gold_label
+            shuffle_cache_dir: data/shuffled
+            shuffle_chunk_size: 10000
         optimizer:
           learning_rates:
             '_attn_res\._residual_scale': 0.0001
@@ -84,8 +83,3 @@ model:
           sampled_loss_scale: 0.20
           label_smoothing: 0.05
           time_rope_regularization_scale: 0.01
-  evaluation:
-    halt_hazard_threshold: 0.6
-    halt_survival_threshold: 0.05
-    batch_size: 64
-    evaluate_every_epochs: 1

@@ -1,16 +1,22 @@
-from dataclasses import dataclass
+from looped_transformer.config.base import NonNegativeInt
+from looped_transformer.config.base import (
+    ConfigPath,
+    NonEmptyString,
+    OptionsModel,
+    PositiveInt,
+)
 
 
-@dataclass(frozen=True, slots=True)
-class DataOptions:
-    train_file_path: str
-    eval_file_path: str
-    output_dir: str
+class DataOptions(OptionsModel):
+    seed: NonNegativeInt
 
-    batch_size: int
-    premise_column: str
-    hypothesis_column: str
-    label_column: str
+    file_path: ConfigPath
+    output_dir: ConfigPath
 
-    shuffle_cache_dir: str
-    shuffle_chunk_size: int
+    batch_size: PositiveInt
+    premise_column: NonEmptyString
+    hypothesis_column: NonEmptyString
+    label_column: NonEmptyString
+
+    shuffle_cache_dir: ConfigPath
+    shuffle_chunk_size: PositiveInt

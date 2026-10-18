@@ -164,8 +164,6 @@ class LoopedMNLI(nn.Module):
         self,
         input_ids: Tensor,
         padding_mask: Tensor,
-        *,
-        force_all_loops: bool = False,
     ) -> ModelForwardOutput:
         dimension = self._model_options.hidden_state_dimension
         batch_size, seq_length = input_ids.shape
@@ -192,10 +190,6 @@ class LoopedMNLI(nn.Module):
         halting_hidden_state = torch.zeros(
             batch_size, seq_length, dimension, device=h.device, dtype=h.dtype
         )
-        halting_times = (self._model_options.max_iterations - 1) * torch.ones(
-            batch_size, device=h.device, dtype=torch.long
-        )
-        batches_halted = torch.zeros(batch_size, device=h.device, dtype=torch.bool)
 
         injection_scale = 1.0 / self._model_options.max_iterations
 
@@ -223,40 +217,14 @@ class LoopedMNLI(nn.Module):
             survivals = survivals_list[-1] * (1 - hazards)
             survivals_list.append(survivals)
 
-            if self.training or force_all_loops:
-                continue
-
-            halt_batches = (~batches_halted) & (
-                (hazards > self._model_options.evaluation.halt_hazard_threshold)
-                | (survivals < self._model_options.evaluation.halt_survival_threshold)
-            )
-            batches_halted = batches_halted | halt_batches
-            halting_times = (
-                halting_times
-                - (self._model_options.max_iterations - 1 - t) * halt_batches
-            )
-
-            if torch.all(batches_halted):
-                break
-
         timed_logits = torch.stack(logits_list)
-
-        if self.training or force_all_loops:
-            timed_hazards = torch.stack(hazards_list)
-            timed_hazards[-1, :] = 1.0
-            timed_survivals = torch.stack(survivals_list[:-1])
-
-            return {
-                "mode": "train",
-                "timed_logits": timed_logits,
-                "halt_probabilities": timed_hazards * timed_survivals,
-                "time_rope_regularization": self._attn_res.time_rope_regularization(),
-            }
-
-        batch_indices = torch.arange(batch_size, device=h.device)
+        timed_hazards = torch.stack(hazards_list)
+        timed_hazards[-1, :] = 1.0
+        timed_survivals = torch.stack(survivals_list[:-1])
 
         return {
-            "mode": "eval",
-            "logits": timed_logits[halting_times, batch_indices],
-            "iterations": halting_times + 1,
+            "mode": "train",
+            "timed_logits": timed_logits,
+            "halt_probabilities": timed_hazards * timed_survivals,
+            "time_rope_regularization": self._attn_res.time_rope_regularization(),
         }

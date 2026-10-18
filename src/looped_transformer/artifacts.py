@@ -9,10 +9,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
+
 from looped_transformer.config import DataOptions, ModelOptions, RuntimeOptions
 
 
 def _canonicalize(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return _canonicalize(value.model_dump())
     if is_dataclass(value) and not isinstance(value, type):
         return _canonicalize(asdict(value))
     if isinstance(value, dict):
@@ -62,13 +66,11 @@ def get_file_fingerprint(path: str | Path) -> dict[str, Any]:
 
 
 def _get_run_artifact_spec(runtime: Any, data: Any, model: Any) -> dict:
-    data_config = asdict(data)
+    data_config = data.model_dump()
     data_config.pop("output_dir", None)
     data_config.pop("shuffle_cache_dir", None)
-    data_config.pop("train_file_path", None)
-    data_config.pop("eval_file_path", None)
-    data_config["train_source"] = get_file_fingerprint(data.train_file_path)
-    data_config["eval_source"] = get_file_fingerprint(data.eval_file_path)
+    data_config.pop("file_path", None)
+    data_config["source"] = get_file_fingerprint(data.file_path)
     return {
         "format": "looped-transformer-training-v1",
         "runtime": runtime,

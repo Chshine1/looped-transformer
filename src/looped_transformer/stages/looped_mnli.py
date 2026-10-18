@@ -1,233 +1,58 @@
 import math
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass, field
-from typing import Any, ClassVar, Self
+from typing import Annotated, ClassVar, Literal
 
 import torch
+from pydantic import BeforeValidator, Field, model_validator
 from torch import nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
-from looped_transformer.config.data import DataOptions
-from looped_transformer.config.training import (
-    CommonStageOptions,
-    StageOptions,
-    check_keys,
-    require_mapping,
+from looped_transformer.config.base import (
+    ExclusiveProbability,
+    NonNegativeFloat,
+    OptionsModel,
+    PositiveInt,
 )
+from looped_transformer.config.torch.optimizer import AdamWOptions
+from looped_transformer.config.torch.scheduler import SchedulerOptions
+from looped_transformer.config.torch.scheduler import WarmupCosineOptions
+from looped_transformer.config.training import CommonStageOptions, StageOptions
 from looped_transformer.data_reader import MNLIDataReader
 from looped_transformer.modules.loss import (
     AnchoredSampledLoopCrossEntropyLoss,
 )
 from looped_transformer.stages.registry import register_stage
-from looped_transformer.types.data import DataSplit
 from looped_transformer.types.train import StageTemplate
 
 
-@dataclass(frozen=True, slots=True)
-class AdamWOptions:
-    learning_rates: dict[str, float]
-    weight_decay: float
-    beta1: float = 0.9
-    beta2: float = 0.999
-    epsilon: float = 1e-8
+class AnchoredSampledLoopLossOptions(OptionsModel):
+    type: Literal["anchored_sampled_loop_cross_entropy"]
+    sampled_loops: Annotated[
+        tuple[PositiveInt, ...], BeforeValidator(tuple), Field(min_length=1)
+    ]
+    sampled_weights: Annotated[
+        tuple[NonNegativeFloat, ...], BeforeValidator(tuple), Field(min_length=1)
+    ]
+    sampled_loss_scale: NonNegativeFloat
+    label_smoothing: ExclusiveProbability = 0.0
+    time_rope_regularization_scale: NonNegativeFloat = 0.0
 
-    def __post_init__(self) -> None:
-        if not self.learning_rates:
-            raise ValueError("learning_rates must not be empty")
-        for pattern, learning_rate in self.learning_rates.items():
-            re.compile(pattern)
-            if learning_rate < 0:
-                raise ValueError("learning rates must not be negative")
-        if self.weight_decay < 0:
-            raise ValueError("weight_decay must not be negative")
-        if not 0 <= self.beta1 < 1 or not 0 <= self.beta2 < 1:
-            raise ValueError("AdamW beta values must be in [0, 1)")
-        if self.epsilon <= 0:
-            raise ValueError("AdamW epsilon must be positive")
-
-    @classmethod
-    def model_validate(cls, value: Any) -> Self:
-        raw = require_mapping(value, "AdamW options")
-        check_keys(
-            raw,
-            {"learning_rates", "weight_decay"},
-            {"beta1", "beta2", "epsilon"},
-        )
-        learning_rates = require_mapping(raw["learning_rates"], "learning_rates")
-        if not all(
-            isinstance(pattern, str) and isinstance(rate, int | float)
-            for pattern, rate in learning_rates.items()
-        ):
-            raise TypeError("learning_rates must map regex strings to numbers")
-        return cls(
-            learning_rates=dict(learning_rates),
-            weight_decay=raw["weight_decay"],
-            beta1=raw.get("beta1", 0.9),
-            beta2=raw.get("beta2", 0.999),
-            epsilon=raw.get("epsilon", 1e-8),
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class WarmupCosineOptions:
-    warmup_ratio: float
-    warmup_start_factor: float
-    minimum_learning_rate_factor: float
-
-    def __post_init__(self) -> None:
-        if not 0 <= self.warmup_ratio < 1:
-            raise ValueError("warmup_ratio must be in [0, 1)")
-        if not 0 < self.warmup_start_factor <= 1:
-            raise ValueError("warmup_start_factor must be in (0, 1]")
-        if not 0 <= self.minimum_learning_rate_factor <= 1:
-            raise ValueError("minimum_learning_rate_factor must be in [0, 1]")
-
-    @classmethod
-    def model_validate(cls, value: Any) -> Self:
-        raw = require_mapping(value, "warmup cosine options")
-        check_keys(
-            raw,
-            {
-                "warmup_ratio",
-                "warmup_start_factor",
-                "minimum_learning_rate_factor",
-            },
-            {"type"},
-        )
-        if raw.get("type", "warmup_cosine") != "warmup_cosine":
-            raise ValueError("Expected scheduler type 'warmup_cosine'")
-        return cls(**raw)
-
-
-@dataclass(frozen=True, slots=True)
-class WarmupConstantOptions:
-    warmup_ratio: float
-    warmup_start_factor: float
-
-    def __post_init__(self) -> None:
-        if not 0 <= self.warmup_ratio < 1:
-            raise ValueError("warmup_ratio must be in [0, 1)")
-        if not 0 < self.warmup_start_factor <= 1:
-            raise ValueError("warmup_start_factor must be in (0, 1]")
-
-    @classmethod
-    def model_validate(cls, value: Any) -> Self:
-        raw = require_mapping(value, "warmup constant options")
-        check_keys(raw, {"type", "warmup_ratio", "warmup_start_factor"})
-        if raw["type"] != "warmup_constant":
-            raise ValueError("Expected scheduler type 'warmup_constant'")
-        return cls(
-            warmup_ratio=raw["warmup_ratio"],
-            warmup_start_factor=raw["warmup_start_factor"],
-        )
-
-
-SchedulerOptions = WarmupCosineOptions | WarmupConstantOptions
-
-
-def _load_scheduler_options(value: Any) -> SchedulerOptions:
-    raw = require_mapping(value, "scheduler options")
-    scheduler_type = raw.get("type", "warmup_cosine")
-    if scheduler_type == "warmup_cosine":
-        values = dict(raw)
-        values.pop("type", None)
-        return WarmupCosineOptions.model_validate(values)
-    if scheduler_type == "warmup_constant":
-        return WarmupConstantOptions.model_validate(raw)
-    raise ValueError(f"Unknown scheduler type: {scheduler_type!r}")
-
-
-@dataclass(frozen=True, slots=True)
-class AnchoredSampledLoopLossOptions:
-    sampled_loops: tuple[int, ...]
-    sampled_weights: tuple[float, ...]
-    sampled_loss_scale: float
-    label_smoothing: float = 0.0
-    time_rope_regularization_scale: float = 0.0
-
-    def __post_init__(self) -> None:
-        if not self.sampled_loops or len(self.sampled_loops) != len(
-            self.sampled_weights
-        ):
-            raise ValueError(
-                "sampled_loops and sampled_weights must have the same nonzero length"
-            )
-        if any(
-            isinstance(loop, bool) or not isinstance(loop, int) or loop <= 0
-            for loop in self.sampled_loops
-        ):
-            raise ValueError("sampled_loops must contain positive 1-based integers")
+    @model_validator(mode="after")
+    def validate_samples(self) -> "AnchoredSampledLoopLossOptions":
+        if len(self.sampled_loops) != len(self.sampled_weights):
+            raise ValueError("sampled_loops and sampled_weights must have equal length")
         if len(set(self.sampled_loops)) != len(self.sampled_loops):
             raise ValueError("sampled_loops must not contain duplicates")
-        if any(
-            isinstance(weight, bool)
-            or not isinstance(weight, int | float)
-            or not math.isfinite(weight)
-            or weight < 0
-            for weight in self.sampled_weights
-        ):
-            raise ValueError("sampled_weights must be finite and nonnegative")
-        if sum(self.sampled_weights) <= 0:
+        if not any(self.sampled_weights):
             raise ValueError("at least one sampled-loop weight must be positive")
-        for name, value in (
-            ("sampled_loss_scale", self.sampled_loss_scale),
-            ("time_rope_regularization_scale", self.time_rope_regularization_scale),
-        ):
-            if not isinstance(value, int | float) or not 0 <= value < math.inf:
-                raise ValueError(f"{name} must be finite and nonnegative")
-        if not isinstance(self.label_smoothing, int | float) or not (
-            0 <= self.label_smoothing < 1
-        ):
-            raise ValueError("label_smoothing must be in [0, 1)")
-
-    @classmethod
-    def model_validate(cls, value: Any) -> Self:
-        raw = require_mapping(value, "anchored sampled-loop loss options")
-        check_keys(
-            raw,
-            {
-                "type",
-                "sampled_loops",
-                "sampled_weights",
-                "sampled_loss_scale",
-            },
-            {"label_smoothing", "time_rope_regularization_scale"},
-        )
-        if raw["type"] != "anchored_sampled_loop_cross_entropy":
-            raise ValueError("Expected loss type 'anchored_sampled_loop_cross_entropy'")
-        loops = raw["sampled_loops"]
-        weights = raw["sampled_weights"]
-        if not isinstance(loops, list) or not isinstance(weights, list):
-            raise TypeError("sampled_loops and sampled_weights must be lists")
-        return cls(
-            sampled_loops=tuple(loops),
-            sampled_weights=tuple(weights),
-            sampled_loss_scale=raw["sampled_loss_scale"],
-            label_smoothing=raw.get("label_smoothing", 0.0),
-            time_rope_regularization_scale=raw.get(
-                "time_rope_regularization_scale", 0.0
-            ),
-        )
+        return self
 
 
 LossOptions = AnchoredSampledLoopLossOptions
 
 
-def _load_loss_options(value: Any) -> LossOptions:
-    raw = require_mapping(value, "loss options")
-    loss_type = raw.get("type", "ponder")
-    option_types = {
-        "anchored_sampled_loop_cross_entropy": AnchoredSampledLoopLossOptions,
-    }
-    options_type = option_types.get(loss_type)
-    if options_type is None:
-        raise ValueError(f"Unknown loss type: {loss_type!r}")
-    return options_type.model_validate(raw)
-
-
-@dataclass(frozen=True, slots=True)
 class LoopedMNLIStageOptions(StageOptions):
     stage_type: ClassVar[str] = "looped_mnli"
 
@@ -235,30 +60,18 @@ class LoopedMNLIStageOptions(StageOptions):
     optimizer: AdamWOptions
     scheduler: SchedulerOptions
     loss: LossOptions
-    type: str = field(init=False, default=stage_type)
-
-    @classmethod
-    def model_validate(cls, value: Any) -> Self:
-        raw = require_mapping(value, "looped MNLI stage options")
-        check_keys(raw, {"type", "common", "optimizer", "scheduler", "loss"})
-        if raw["type"] != cls.stage_type:
-            raise ValueError(f"Expected stage type {cls.stage_type!r}")
-        return cls(
-            common=CommonStageOptions.model_validate(raw["common"]),
-            optimizer=AdamWOptions.model_validate(raw["optimizer"]),
-            scheduler=_load_scheduler_options(raw["scheduler"]),
-            loss=_load_loss_options(raw["loss"]),
-        )
+    type: Literal["looped_mnli"]
 
 
 def _build_stage_template(
     template_id: str,
     options: StageOptions,
-    data_reader: MNLIDataReader,
-    data_options: DataOptions,
 ) -> StageTemplate:
     if not isinstance(options, LoopedMNLIStageOptions):
         raise TypeError("looped_mnli requires LoopedMNLIStageOptions")
+
+    data_options = options.common.data
+    data_reader = MNLIDataReader(data_options)
 
     def get_optimizer(
         named_parameters: Iterable[tuple[str, nn.parameter.Parameter]],
@@ -272,7 +85,7 @@ def _build_stage_template(
         )
 
     def get_scheduler(optimizer: Optimizer) -> LRScheduler:
-        row_count = data_reader.count_examples(DataSplit.TRAIN)
+        row_count = data_reader.count_examples()
         batches_per_epoch = math.ceil(row_count / data_options.batch_size)
         steps_per_epoch = math.ceil(
             batches_per_epoch / options.common.gradient_accumulation_steps

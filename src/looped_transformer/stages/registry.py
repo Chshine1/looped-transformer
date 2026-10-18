@@ -3,11 +3,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from looped_transformer.config.data import DataOptions
-from looped_transformer.config.training import StageOptions, require_mapping
-from looped_transformer.data_reader import MNLIDataReader
+from looped_transformer.config.training import StageOptions
 from looped_transformer.types.train import StageTemplate
 
-StageBuilder = Callable[[str, StageOptions, MNLIDataReader, DataOptions], StageTemplate]
+StageBuilder = Callable[[str, StageOptions], StageTemplate]
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,7 +26,9 @@ def register_stage(options_model: type[StageOptions], builder: StageBuilder) -> 
 
 
 def load_stage_options(value: Any) -> StageOptions:
-    raw: Mapping[str, Any] = require_mapping(value, "stage template")
+    if not isinstance(value, Mapping):
+        raise TypeError("stage template must be a mapping")
+    raw: Mapping[str, Any] = value
     stage_type = raw.get("type")
     if not isinstance(stage_type, str) or not stage_type:
         raise ValueError("A stage template requires a non-empty 'type'")
@@ -44,8 +45,6 @@ def load_stage_options(value: Any) -> StageOptions:
 def build_stage_template(
     template_id: str,
     options: StageOptions,
-    data_reader: MNLIDataReader,
-    data_options: DataOptions,
 ) -> StageTemplate:
     try:
         definition = _STAGE_DEFINITIONS[options.stage_type]
@@ -56,4 +55,4 @@ def build_stage_template(
             f"Options for {options.stage_type!r} must be "
             f"{definition.options_model.__name__}"
         )
-    return definition.builder(template_id, options, data_reader, data_options)
+    return definition.builder(template_id, options)

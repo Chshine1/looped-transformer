@@ -1,124 +1,62 @@
 import re
-from abc import ABC, abstractmethod
-from collections.abc import Mapping, Set
-from dataclasses import dataclass
-from typing import Any, ClassVar, Self
+from typing import Any, ClassVar
+
+from pydantic import Field, SerializeAsAny, field_validator, model_validator
+
+from looped_transformer.config import DataOptions
+from looped_transformer.config.base import (
+    NonEmptyString,
+    OptionsModel,
+    PositiveFloat,
+    PositiveInt,
+)
 
 
-def check_keys(
-    raw: Mapping[str, Any], required: Set[str], optional: Set[str] = frozenset()
-) -> None:
-    missing = required - raw.keys()
-    if missing:
-        raise ValueError(f"Missing options: {', '.join(sorted(missing))}")
-    unexpected = raw.keys() - required - optional
-    if unexpected:
-        raise ValueError(f"Unexpected options: {', '.join(sorted(unexpected))}")
-
-
-def require_mapping(value: Any, name: str) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping):
-        raise TypeError(f"{name} must be a mapping")
-    return value
-
-
-@dataclass(frozen=True, slots=True)
-class CommonStageOptions:
-    epochs: int
+class CommonStageOptions(OptionsModel):
+    epochs: PositiveInt
     frozen_patterns: str = r"(?!)"
     evaluation_patterns: str = r"(?!)"
-    max_gradient_norm: float = 1.0
-    gradient_accumulation_steps: int = 1
-    save_every_epochs: int = 1
+    max_gradient_norm: PositiveFloat = 1.0
+    gradient_accumulation_steps: PositiveInt = 1
+    save_every_epochs: PositiveInt = 1
+    data: DataOptions
 
-    def __post_init__(self) -> None:
-        if isinstance(self.epochs, bool) or not isinstance(self.epochs, int):
-            raise TypeError("epochs must be an integer")
-        if self.epochs <= 0:
-            raise ValueError("epochs must be positive")
-        if self.max_gradient_norm <= 0:
-            raise ValueError("max_gradient_norm must be positive")
-        if self.gradient_accumulation_steps <= 0:
-            raise ValueError("gradient_accumulation_steps must be positive")
-        if self.save_every_epochs <= 0:
-            raise ValueError("save_every_epochs must be positive")
-        re.compile(self.frozen_patterns)
-        re.compile(self.evaluation_patterns)
-
+    @field_validator("frozen_patterns", "evaluation_patterns")
     @classmethod
-    def model_validate(cls, value: Any) -> Self:
-        raw = require_mapping(value, "common stage options")
-        check_keys(
-            raw,
-            {"epochs"},
-            {
-                "frozen_patterns",
-                "evaluation_patterns",
-                "max_gradient_norm",
-                "gradient_accumulation_steps",
-                "save_every_epochs",
-            },
-        )
-        return cls(
-            epochs=raw["epochs"],
-            frozen_patterns=raw.get("frozen_patterns", r"(?!)"),
-            evaluation_patterns=raw.get("evaluation_patterns", r"(?!)"),
-            max_gradient_norm=raw.get("max_gradient_norm", 1.0),
-            gradient_accumulation_steps=raw.get("gradient_accumulation_steps", 1),
-            save_every_epochs=raw.get("save_every_epochs", 1),
-        )
+    def compile_regex(cls, value: str) -> str:
+        re.compile(value)
+        return value
 
 
-class StageOptions(ABC):
+class StageOptions(OptionsModel):
     stage_type: ClassVar[str]
 
+
+class TrainingOptions(OptionsModel):
+    stage_templates: dict[NonEmptyString, SerializeAsAny[StageOptions]]
+    stages: list[NonEmptyString] = Field(min_length=1)
+    log_every_steps: PositiveInt = 50
+
+    @field_validator("stage_templates", mode="before")
     @classmethod
-    @abstractmethod
-    def model_validate(cls, value: Any) -> Self:
-        """Construct and validate this concrete stage's complete configuration."""
+    def load_registered_stage_options(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
 
+        from looped_transformer.stages.registry import load_stage_options
 
-@dataclass(frozen=True, slots=True)
-class TrainingOptions:
-    stage_templates: dict[str, StageOptions]
-    stages: list[str]
-    log_every_steps: int = 50
+        return {
+            template_id: load_stage_options(options)
+            for template_id, options in value.items()
+        }
 
-    def __post_init__(self) -> None:
-        if not self.stages:
-            raise ValueError("At least one training stage must be configured")
+    @model_validator(mode="after")
+    def validate_stage_sequence(self) -> "TrainingOptions":
         if len(self.stages) != len(set(self.stages)):
-            raise ValueError("A stage template can only appear once in a run")
+            raise ValueError("a stage template can only appear once in a run")
         missing = set(self.stages) - self.stage_templates.keys()
         if missing:
             raise ValueError(
-                "Stages reference missing templates: " + ", ".join(sorted(missing))
+                "stages reference missing templates: " + ", ".join(sorted(missing))
             )
-        if self.log_every_steps <= 0:
-            raise ValueError("log_every_steps must be positive")
-
-    @classmethod
-    def model_validate(cls, value: Any) -> Self:
-        raw = require_mapping(value, "training options")
-        check_keys(raw, {"stage_templates", "stages"}, {"log_every_steps"})
-
-        templates_raw = require_mapping(raw["stage_templates"], "stage_templates")
-        from looped_transformer.stages.registry import load_stage_options
-
-        templates: dict[str, StageOptions] = {}
-        for template_id, template_raw in templates_raw.items():
-            if not isinstance(template_id, str) or not template_id:
-                raise ValueError("Stage template ids must be non-empty strings")
-            templates[template_id] = load_stage_options(template_raw)
-
-        stages = raw["stages"]
-        if not isinstance(stages, list) or not all(
-            isinstance(stage_id, str) and stage_id for stage_id in stages
-        ):
-            raise TypeError("stages must be a list of non-empty template ids")
-
-        return cls(
-            stage_templates=templates,
-            stages=stages,
-            log_every_steps=raw.get("log_every_steps", 50),
-        )
+        return self

@@ -10,10 +10,4 @@ class ModelTrainOutput(TypedDict):
     time_rope_regularization: NotRequired[Tensor]
 
 
-class ModelEvalOutput(TypedDict):
-    mode: Literal["eval"]
-    logits: Tensor
-    iterations: Tensor
-
-
-ModelForwardOutput = ModelTrainOutput | ModelEvalOutput
+ModelForwardOutput = ModelTrainOutput

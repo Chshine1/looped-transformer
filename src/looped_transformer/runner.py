@@ -18,7 +18,6 @@ from looped_transformer.config.runtime import RuntimeOptions
 from looped_transformer.data_reader import MNLIDataReader
 from looped_transformer.modules.model import LoopedMNLI
 from looped_transformer.tokenizer import MNLITokenizer
-from looped_transformer.types.data import DataSplit
 from looped_transformer.types.mnli import get_logic_relation
 from looped_transformer.types.model import ModelTrainOutput
 from looped_transformer.types.train import StageTemplate, TrainingState
@@ -134,7 +133,6 @@ class MNLIRunner:
 
         for batch_index, batch in enumerate(
             stage.data_reader.get_batches_iterator(
-                DataSplit.TRAIN,
                 shuffle=True,
                 seed=self._runtime_options.seed + state.epoch,
             )
@@ -232,8 +230,7 @@ class MNLIRunner:
     ) -> tuple[int, int]:
         accumulation_steps = stage.gradient_accumulation_steps
         batches_count = math.ceil(
-            stage.data_reader.count_examples(DataSplit.TRAIN)
-            / self._data_options.batch_size
+            stage.data_reader.count_examples() / self._data_options.batch_size
         )
 
         window_start = (batch_index // accumulation_steps) * accumulation_steps

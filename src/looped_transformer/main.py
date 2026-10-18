@@ -28,8 +28,8 @@ def main() -> None:
         options.data,
         options.runtime,
     )
-    data_reader = MNLIDataReader(options.runtime, options.data)
-    stages = build_stage_templates(options.model.training, data_reader, options.data)
+    data_reader = MNLIDataReader(options.data)
+    stages = build_stage_templates(options.model.training)
     runner = MNLIRunner(
         tokenizer,
         checkpoint_manager_factory,
