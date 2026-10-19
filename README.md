@@ -40,6 +40,28 @@ pixi run typecheck
 pixi run train
 ```
 
+## Evaluation
+
+Evaluation is composed from an inference runner and an evaluation policy. The
+built-in `LoopDiagnosticsPolicy` treats the final-loop score as the deployable
+warmup metric, while emphasizing whether the backbone exposes useful stopping
+opportunities elsewhere in the trajectory. It compares the label-aware
+per-sample oracle with both the best fixed loop and a repeated shuffled-label
+oracle, and records rescue rates, preferred-loop histograms, prediction changes,
+and per-loop class histograms. The oracle measures backbone headroom; it is not
+an estimate of an untrained controller's performance.
+
+```powershell
+python -m looped_transformer.main --config-dir conf eval `
+  --checkpoint outputs/<run>/<checkpoint>.pt `
+  --output-dir outputs/<run>/evaluation
+```
+
+The output directory contains `batches.jsonl` with one structured record per
+batch and `summary.json` with the final result and aggregate diagnostics. If
+`--output-dir` is omitted, the files are written to an `evaluation` directory
+beside the checkpoint.
+
 ## Scope
 
 The initial claim is comparative rather than architectural novelty. Required
