@@ -35,13 +35,12 @@ class MNLIRunner:
         self._model_options = model_options
         self._runtime_options = runtime_options
         self._device = resolve_device(runtime_options)
-        self._parameter_dtype = resolve_dtype(runtime_options.dtype)
         self._amp_dtype = resolve_dtype(runtime_options.amp_dtype)
         self._configure_runtime()
 
         self._tokenizer = tokenizer
         self._model = LoopedMNLI(model_options, tokenizer.get_tokenizer_info()).to(
-            device=self._device, dtype=self._parameter_dtype
+            device=self._device, dtype=resolve_dtype(runtime_options.dtype)
         )
 
     def _configure_runtime(self) -> None:
@@ -219,8 +218,9 @@ class MNLIRunner:
         if should_save:
             checkpoint_manager.save_epoch(state, components)
 
+    @staticmethod
     def _get_accumulation_window(
-        self, batch_size: int, batch_index: int, stage: StageTemplate
+        batch_size: int, batch_index: int, stage: StageTemplate
     ) -> tuple[int, int]:
         accumulation_steps = stage.gradient_accumulation_steps
         batches_count = math.ceil(stage.data_reader.count_examples() / batch_size)

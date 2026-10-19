@@ -30,12 +30,12 @@ def load_options(
         version_base=None,
         config_dir=str(Path(config_dir).resolve()),
     ):
-        cfg: DictConfig = compose(
+        config: DictConfig = compose(
             config_name="config",
             overrides=overrides,
         )
 
     raw: dict[str, Any] = cast(
-        dict[str, Any], OmegaConf.to_container(cfg, resolve=True)
+        dict[str, Any], OmegaConf.to_container(config, resolve=True)
     )
     return AppOptions.model_validate(raw)

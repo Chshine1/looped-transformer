@@ -1,4 +1,4 @@
 defaults:
   - base
-  - no-dropout
+  - no-overfit-prevention
   - _self_
