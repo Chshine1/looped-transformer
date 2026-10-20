@@ -9,12 +9,10 @@ class StructuredEvaluationLogger:
     def __init__(self, output_dir: str | Path) -> None:
         self.output_dir = Path(output_dir)
         self.batch_log_path = self.output_dir / "batches.jsonl"
-        self.summary_path = self.output_dir / "summary.json"
 
     def start(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.batch_log_path.write_text("", encoding="utf-8")
-        self.summary_path.unlink(missing_ok=True)
 
     def log_batch(self, diagnostics: Any) -> None:
         record = {

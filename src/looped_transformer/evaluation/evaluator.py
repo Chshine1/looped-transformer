@@ -17,11 +17,12 @@ class Evaluator:
         self,
         checkpoint_path: str,
         data_reader: MNLIDataReader,
+        tokenizer: MNLITokenizer,
         model_options: ModelOptions,
         runtime_options: RuntimeOptions,
         policy: EvaluationPolicy,
     ) -> None:
-        self._tokenizer = MNLITokenizer(model_options.max_sequence_length)
+        self._tokenizer = tokenizer
         self._runtime_options = runtime_options
         self._data_reader = data_reader
         self._device = resolve_device(runtime_options)

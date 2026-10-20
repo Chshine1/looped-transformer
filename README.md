@@ -54,6 +54,7 @@ an estimate of an untrained controller's performance.
 ```powershell
 python -m looped_transformer.main --config-dir conf eval `
   --checkpoint outputs/<run>/<checkpoint>.pt `
+  --data-file data/mnli_matched.tsv --batch-size 64 `
   --output-dir outputs/<run>/evaluation
 ```
 
@@ -61,6 +62,23 @@ The output directory contains `batches.jsonl` with one structured record per
 batch and `summary.json` with the final result and aggregate diagnostics. If
 `--output-dir` is omitted, the files are written to an `evaluation` directory
 beside the checkpoint.
+
+Use a distinct `--output-dir` for each checkpoint/dataset combination; evaluation
+replaces logs in that directory. The default dataset is matched validation.
+To compare every warmup checkpoint on sampled training and matched validation
+using the configuration recorded in `artifact.json`:
+
+```powershell
+python scripts/checkpoint_depth_sweep.py --run-dir outputs/<run>
+python scripts/summarize_depth_sweep.py outputs/<run>/depth_analysis
+```
+
+The sweep saves aggregate JSON diagnostics and per-example logits/labels under
+`depth_analysis`. Existing trajectory caches are reused; use a fresh directory
+or remove the corresponding cache if the dataset or evaluation implementation
+changes. `--splits train_sample matched mismatched` includes both validation sets.
+The additional diagnostics compare all loops with supervised loops 3–6 and
+include causal confidence-threshold baselines.
 
 ## Scope
 

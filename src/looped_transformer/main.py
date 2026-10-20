@@ -1,4 +1,5 @@
 import argparse
+import json
 from pathlib import Path
 
 from looped_transformer.checkpoint_manager import CheckpointManagerFactory
@@ -33,6 +34,13 @@ def main() -> None:
 
     eval_parser = subparser.add_parser("eval")
     eval_parser.add_argument(
+        "--data-file",
+        type=Path,
+        default=Path("data/mnli_matched.tsv"),
+        help="MNLI TSV to evaluate (default: matched validation)",
+    )
+    eval_parser.add_argument("--batch-size", type=int, default=64)
+    eval_parser.add_argument(
         "--checkpoint",
         required=True,
     )
@@ -63,8 +71,8 @@ def main() -> None:
     if args.command == "eval":
         data_options = DataOptions(
             seed=42,
-            file_path=Path("data/mnli_train.tsv"),
-            batch_size=64,
+            file_path=args.data_file,
+            batch_size=args.batch_size,
             premise_column="sentence1",
             hypothesis_column="sentence2",
             label_column="gold_label",
@@ -77,7 +85,7 @@ def main() -> None:
         policy = LoopDiagnosticsPolicy(
             max_iterations=options.model.max_iterations,
             device=resolve_device(options.runtime),
-            label_smoothing=0.0,
+            label_smoothing=0.05,
             primary_reduction="final_loop",
             shuffle_oracle_repeats=20,
             logger=StructuredEvaluationLogger(evaluation_output_dir),
@@ -85,12 +93,19 @@ def main() -> None:
         evaluator = Evaluator(
             args.checkpoint,
             MNLIDataReader(data_options),
+            tokenizer,
             options.model,
             options.runtime,
             policy,
         )
         evaluator.evaluate()
-        print(f"Evaluation summary written to {evaluation_output_dir / 'summary.json'}")
+        summary = policy.collect_diagnostics()
+        summary["checkpoint"] = str(Path(args.checkpoint).resolve())
+        summary["data_file"] = str(args.data_file.resolve())
+        (evaluation_output_dir / "summary.json").write_text(
+            json.dumps(summary, indent=2), encoding="utf-8"
+        )
+        print(f"Evaluation logs written to {evaluation_output_dir}")
 
 
 if __name__ == "__main__":
