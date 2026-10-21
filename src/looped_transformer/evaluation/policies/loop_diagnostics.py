@@ -1,3 +1,5 @@
+from looped_transformer.modules.model import LoopedMNLI
+from looped_transformer.evaluation.policy import EvaluationPolicy
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -55,7 +57,7 @@ class _MetricTotals:
         }
 
 
-class LoopDiagnosticsPolicy:
+class LoopDiagnosticsPolicy(EvaluationPolicy):
     _target_histogram: Tensor | None
     _final_prediction_histogram: Tensor | None
     _per_loop_prediction_histogram: Tensor | None
@@ -135,7 +137,8 @@ class LoopDiagnosticsPolicy:
         self._final_prediction_histogram: Tensor | None = None
         self._per_loop_prediction_histogram: Tensor | None = None
 
-    def reset(self) -> None:
+    def reset(self, model: LoopedMNLI) -> None:
+        del model
         self._initialize_state()
         if self._logger is not None:
             self._logger.start()

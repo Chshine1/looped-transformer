@@ -6,7 +6,7 @@ from looped_transformer.types.model import ModelTrainOutput
 
 
 def _cross_entropy_by_time(
-    output: ModelTrainOutput, labels: Tensor, label_smoothing: float = 0.0
+    output: ModelTrainOutput, labels: Tensor, label_smoothing: float
 ) -> Tensor:
     """Return unreduced cross-entropy with shape (iterations, batch)."""
     logits = output["timed_logits"].float()

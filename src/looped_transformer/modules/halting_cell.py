@@ -1,3 +1,4 @@
+from looped_transformer.modules.masked_mean_pooling import MaskedMeanPooling
 import torch
 from torch import Tensor, nn
 from torch.nn import functional
@@ -49,6 +50,8 @@ class HaltingCell(nn.Module):
             adjustment_mlp_last,
         )
 
+        self._masked_mean_pooling = MaskedMeanPooling()
+
     def forward(
         self,
         time: int,
@@ -81,8 +84,7 @@ class HaltingCell(nn.Module):
             + functional.softplus(self._hazard_baseline_scale) * time
             + torch.tanh(out) * self._hazard_adjustment_scale
         )
-        mask = padding_mask.unsqueeze(-1).to(hazards_logit.dtype)
-        hazards_logit = (hazards_logit * mask).sum(1) / mask.sum(1).clamp(min=1)
+        hazards_logit = self._masked_mean_pooling(hazards_logit, padding_mask)
         hazards_logit = hazards_logit.squeeze(-1)
 
         return {

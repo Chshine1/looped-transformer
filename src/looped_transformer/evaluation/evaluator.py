@@ -35,7 +35,7 @@ class Evaluator:
 
     def evaluate(self) -> None:
         training_modes = [(module, module.training) for module in self._model.modules()]
-        self._policy.reset()
+        self._policy.reset(self._model)
 
         try:
             self._model.eval()
