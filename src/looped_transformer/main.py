@@ -1,8 +1,8 @@
+from looped_transformer.checkpoint_manager import CheckpointSaver, CheckpointLoader
 import argparse
 import json
 from pathlib import Path
 
-from looped_transformer.checkpoint_manager import CheckpointManagerFactory
 from looped_transformer.config import DataOptions, load_options
 from looped_transformer.data_reader import MNLIDataReader
 from looped_transformer.evaluation import Evaluator, StructuredEvaluationLogger
@@ -52,9 +52,10 @@ def main() -> None:
     args = parser.parse_args()
     options = load_options(args.config_dir, args.override)
     tokenizer = MNLITokenizer(options.model.max_sequence_length)
+    checkpoint_loader = CheckpointLoader(options.runtime)
 
     if args.command == "train":
-        checkpoint_manager_factory = CheckpointManagerFactory(
+        checkpoint_saver = CheckpointSaver(
             options.model,
             options.data,
             options.runtime,
@@ -62,7 +63,8 @@ def main() -> None:
         stages = build_stage_templates(options.model.training)
         runner = MNLIRunner(
             tokenizer,
-            checkpoint_manager_factory,
+            checkpoint_saver,
+            checkpoint_loader,
             options.model,
             options.runtime,
         )
@@ -91,6 +93,7 @@ def main() -> None:
         )
         evaluator = Evaluator(
             args.checkpoint,
+            checkpoint_loader,
             MNLIDataReader(data_options),
             tokenizer,
             options.model,

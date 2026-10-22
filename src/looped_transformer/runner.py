@@ -1,23 +1,22 @@
-from torch import Tensor
-
-from looped_transformer.types.data import MNLIBatch
 import dataclasses
 import math
 import random
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 
 import torch
+from torch import Tensor
 
 from looped_transformer.checkpoint_manager import (
     CheckpointComponents,
-    CheckpointManager,
-    CheckpointManagerFactory,
+    CheckpointSaver,
+    CheckpointLoader,
 )
 from looped_transformer.config.model import ModelOptions
 from looped_transformer.config.runtime import RuntimeOptions
 from looped_transformer.modules.model import LoopedMNLI
 from looped_transformer.tokenizer import MNLITokenizer
+from looped_transformer.types.data import MNLIBatch
 from looped_transformer.types.mnli import get_logic_relation
 from looped_transformer.types.model import ModelTrainOutput
 from looped_transformer.types.train import StageTemplate, TrainingState
@@ -41,11 +40,13 @@ class MNLIRunner:
     def __init__(
         self,
         tokenizer: MNLITokenizer,
-        checkpoint_manager_factory: CheckpointManagerFactory,
+        checkpoint_saver: CheckpointSaver,
+        checkpoint_loader: CheckpointLoader,
         model_options: ModelOptions,
         runtime_options: RuntimeOptions,
     ):
-        self._checkpoint_manager_factory = checkpoint_manager_factory
+        self._checkpoint_saver = checkpoint_saver
+        self._checkpoint_loader = checkpoint_loader
 
         self._model_options = model_options
         self._runtime_options = runtime_options
@@ -75,12 +76,9 @@ class MNLIRunner:
             best_accuracy=-1.0,
         )
 
-        checkpoint_manager = self._checkpoint_manager_factory.create(
-            self._runtime_options.device
-        )
-        load_components: Callable[[CheckpointComponents], None] | None = None
         if resume_from is not None:
-            state, load_components = checkpoint_manager.load(resume_from)
+            self._checkpoint_loader.load(resume_from)
+            state = self._checkpoint_loader.load_training_state()
 
         beginning_stage_index = 0
         if state.stage_id:
@@ -98,10 +96,9 @@ class MNLIRunner:
             self._model.train()
             for stage in stages[beginning_stage_index:]:
                 components = self._on_stage_begin(stage, state)
-                if load_components is not None:
-                    # noinspection calling-non-callable
-                    load_components(components)
-                    load_components = None
+                if resume_from is not None:
+                    self._checkpoint_loader.load_components(components)
+                    self._checkpoint_loader.dispose()
 
                 stage = dataclasses.replace(
                     stage, loss=stage.loss.to(self._runtime_options.device)
@@ -109,7 +106,7 @@ class MNLIRunner:
                 for _ in range(state.epoch, stage.epochs):
                     self._run_epoch(stage, state, components)
                     state.epoch += 1
-                    self._on_epoch_end(stage, state, components, checkpoint_manager)
+                    self._on_epoch_end(stage, state, components)
 
                 state.epoch = 0
         finally:
@@ -202,17 +199,16 @@ class MNLIRunner:
 
         return components
 
-    @staticmethod
     def _on_epoch_end(
+        self,
         stage: StageTemplate,
         state: TrainingState,
         components: CheckpointComponents,
-        checkpoint_manager: CheckpointManager,
     ) -> None:
         should_save = state.epoch % stage.save_every_epochs == 0
 
         if should_save:
-            checkpoint_manager.save_epoch(state, components)
+            self._checkpoint_saver.save_epoch(state, components)
 
     @staticmethod
     def _get_accumulation_window(

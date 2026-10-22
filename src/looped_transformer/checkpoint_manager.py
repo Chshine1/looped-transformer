@@ -1,5 +1,4 @@
 import random
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,31 +22,29 @@ class CheckpointComponents:
     scaler: torch.amp.GradScaler
 
 
-class CheckpointManager:
-    BEST_NAME = "best.pt"
-
+class CheckpointSaver:
     def __init__(
         self,
-        output_dir: Path,
-        device: torch.device,
+        model_options: ModelOptions,
+        data_options: CommonDataOptions,
+        runtime_options: RuntimeOptions,
     ):
+        output_dir, identifier, spec = get_run_output_dir(
+            runtime_options,
+            data_options,
+            model_options,
+        )
+        write_manifest(output_dir, identifier, spec)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.device = device
+        self.device = runtime_options.device
 
-    def save_best(self, state: TrainingState, components: CheckpointComponents) -> Path:
-        path = self.output_dir / self.BEST_NAME
-        return self._save(path, state, components)
+        self._checkpoint: dict | None = None
 
     def save_epoch(
         self, state: TrainingState, components: CheckpointComponents
     ) -> Path:
         path = self.output_dir / state.stage_id / f"checkpoint-epoch-{state.epoch}.pt"
-        return self._save(path, state, components)
-
-    def _save(
-        self, path: Path, state: TrainingState, components: CheckpointComponents
-    ) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(self._construct_payload(state, components), path)
         return path
@@ -71,33 +68,23 @@ class CheckpointManager:
             ),
         }
 
-    def load(
-        self, resume_from: str
-    ) -> tuple[TrainingState, Callable[[CheckpointComponents], None]]:
-        checkpoint: dict = torch.load(
+
+class CheckpointLoader:
+    def __init__(
+        self,
+        runtime_options: RuntimeOptions,
+    ):
+        self.device = runtime_options.device
+        self._checkpoint: dict | None = None
+
+    def load(self, resume_from: str) -> None:
+        checkpoint = torch.load(
             resume_from,
             map_location=self.device,
             weights_only=True,
         )
+        self._checkpoint = checkpoint
 
-        def load_components(components: CheckpointComponents) -> None:
-            components.model.load_state_dict(checkpoint["model"])
-            components.optimizer.load_state_dict(checkpoint["optimizer"])
-            components.scheduler.load_state_dict(checkpoint["scheduler"])
-            components.scaler.load_state_dict(checkpoint["scaler"])
-
-        self._restore_rng(checkpoint)
-
-        epoch = int(checkpoint["epoch"])
-
-        return TrainingState(
-            stage_id=checkpoint["stage_id"],
-            epoch=epoch,
-            global_step=int(checkpoint["global_step"]),
-            best_accuracy=float(checkpoint["best_accuracy"]),
-        ), load_components
-
-    def _restore_rng(self, checkpoint: dict) -> None:
         if "python_random_state" in checkpoint:
             random.setstate(checkpoint["python_random_state"])
 
@@ -109,26 +96,30 @@ class CheckpointManager:
                 [state.cpu() for state in checkpoint["cuda_random_state"]]
             )
 
-
-class CheckpointManagerFactory:
-    def __init__(
-        self,
-        model_options: ModelOptions,
-        data_options: CommonDataOptions,
-        runtime_options: RuntimeOptions,
-    ) -> None:
-        self._model_options = model_options
-        self._data_options = data_options
-        self._runtime_options = runtime_options
-
-    def create(self, device: torch.device) -> CheckpointManager:
-        output_dir, identifier, spec = get_run_output_dir(
-            self._runtime_options,
-            self._data_options,
-            self._model_options,
+    def load_training_state(self) -> TrainingState:
+        if self._checkpoint is None:
+            raise RuntimeError()
+        return TrainingState(
+            stage_id=self._checkpoint["stage_id"],
+            epoch=int(self._checkpoint["epoch"]),
+            global_step=int(self._checkpoint["global_step"]),
+            best_accuracy=float(self._checkpoint["best_accuracy"]),
         )
-        write_manifest(output_dir, identifier, spec)
-        return CheckpointManager(
-            output_dir=output_dir,
-            device=device,
-        )
+
+    def load_components(self, components: CheckpointComponents) -> None:
+        if self._checkpoint is None:
+            raise RuntimeError()
+        components.model.load_state_dict(self._checkpoint["model"])
+        components.optimizer.load_state_dict(self._checkpoint["optimizer"])
+        components.scheduler.load_state_dict(self._checkpoint["scheduler"])
+        components.scaler.load_state_dict(self._checkpoint["scaler"])
+
+    def load_model(self, model: nn.Module) -> None:
+        if self._checkpoint is None:
+            raise RuntimeError()
+        model.load_state_dict(self._checkpoint["model"])
+
+    def dispose(self) -> None:
+        if self._checkpoint is not None:
+            del self._checkpoint
+            self._checkpoint = None

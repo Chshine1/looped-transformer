@@ -2,6 +2,7 @@ import random
 
 import torch
 
+from looped_transformer.checkpoint_manager import CheckpointLoader
 from looped_transformer.config import ModelOptions, RuntimeOptions
 from looped_transformer.data_reader import MNLIDataReader
 from looped_transformer.evaluation.policy import EvaluationPolicy
@@ -14,6 +15,7 @@ class Evaluator:
     def __init__(
         self,
         checkpoint_path: str,
+        checkpoint_loader: CheckpointLoader,
         data_reader: MNLIDataReader,
         tokenizer: MNLITokenizer,
         model_options: ModelOptions,
@@ -28,7 +30,9 @@ class Evaluator:
         self._model = LoopedMNLI(
             model_options, self._tokenizer.get_tokenizer_info()
         ).to(device=runtime_options.device, dtype=runtime_options.dtype)
-        self._load_checkpoint(checkpoint_path)
+        checkpoint_loader.load(checkpoint_path)
+        checkpoint_loader.load_model(self._model)
+        checkpoint_loader.dispose()
 
     def evaluate(self) -> None:
         training_modes = [(module, module.training) for module in self._model.modules()]
@@ -50,22 +54,3 @@ class Evaluator:
         finally:
             for module, training in training_modes:
                 module.train(training)
-
-    def _load_checkpoint(self, checkpoint_path: str) -> None:
-        checkpoint: dict = torch.load(
-            checkpoint_path,
-            map_location=self._runtime_options.device,
-            weights_only=True,
-        )
-        self._model.load_state_dict(checkpoint["model"])
-
-        if "python_random_state" in checkpoint:
-            random.setstate(checkpoint["python_random_state"])
-        if "torch_random_state" in checkpoint:
-            torch.set_rng_state(checkpoint["torch_random_state"].cpu())
-        if self._runtime_options.device.type == "cuda" and checkpoint.get(
-            "cuda_random_state"
-        ):
-            torch.cuda.set_rng_state_all(
-                [state.cpu() for state in checkpoint["cuda_random_state"]]
-            )
