@@ -1,15 +1,17 @@
-from looped_transformer.checkpoint_manager import CheckpointSaver, CheckpointLoader
 import argparse
 import json
 from pathlib import Path
 
 from looped_transformer.config import DataOptions, load_options
-from looped_transformer.data_reader import MNLIDataReader
-from looped_transformer.evaluation import Evaluator, StructuredEvaluationLogger
+from looped_transformer.dependency_injection import (
+    build_container,
+    configure_evaluation,
+)
+from looped_transformer.evaluation import Evaluator
+from looped_transformer.evaluation.options import EvaluationOptions
 from looped_transformer.evaluation.policies import LoopDiagnosticsPolicy
 from looped_transformer.runner import MNLIRunner
 from looped_transformer.stages import build_stage_templates
-from looped_transformer.tokenizer import MNLITokenizer
 
 
 def main() -> None:
@@ -51,23 +53,11 @@ def main() -> None:
 
     args = parser.parse_args()
     options = load_options(args.config_dir, args.override)
-    tokenizer = MNLITokenizer(options.model.max_sequence_length)
-    checkpoint_loader = CheckpointLoader(options.runtime)
+    container = build_container(options)
 
     if args.command == "train":
-        checkpoint_saver = CheckpointSaver(
-            options.model,
-            options.data,
-            options.runtime,
-        )
         stages = build_stage_templates(options.model.training)
-        runner = MNLIRunner(
-            tokenizer,
-            checkpoint_saver,
-            checkpoint_loader,
-            options.model,
-            options.runtime,
-        )
+        runner = container[MNLIRunner]
         runner.train(stages, args.resume)
     if args.command == "eval":
         data_options = DataOptions(
@@ -83,24 +73,14 @@ def main() -> None:
         evaluation_output_dir = args.output_dir or (
             Path(args.checkpoint).resolve().parent / "evaluation"
         )
-        policy = LoopDiagnosticsPolicy(
-            max_iterations=options.model.max_iterations,
-            device=options.runtime.device,
-            label_smoothing=0.05,
-            primary_reduction="final_loop",
-            shuffle_oracle_repeats=20,
-            logger=StructuredEvaluationLogger(evaluation_output_dir),
+        evaluation_options = EvaluationOptions(
+            checkpoint_path=Path(args.checkpoint),
+            data=data_options,
+            output_dir=evaluation_output_dir,
         )
-        evaluator = Evaluator(
-            args.checkpoint,
-            checkpoint_loader,
-            MNLIDataReader(data_options),
-            tokenizer,
-            options.model,
-            options.runtime,
-            policy,
-        )
-        evaluator.evaluate()
+        evaluation_container = configure_evaluation(container, evaluation_options)
+        evaluation_container[Evaluator].evaluate()
+        policy = evaluation_container[LoopDiagnosticsPolicy]
         summary = policy.collect_diagnostics()
         summary["checkpoint"] = str(Path(args.checkpoint).resolve())
         summary["data_file"] = str(args.data_file.resolve())

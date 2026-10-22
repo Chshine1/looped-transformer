@@ -1,18 +1,17 @@
-from looped_transformer.modules.model import LoopedMNLI
-from looped_transformer.evaluation.policy import EvaluationPolicy
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
 import torch
 from torch import Tensor
 from torch.nn import functional
 
 from looped_transformer.evaluation.logging import StructuredEvaluationLogger
+from looped_transformer.evaluation.options import PrimaryReduction
+from looped_transformer.evaluation.policy import EvaluationPolicy
+from looped_transformer.modules.model import LoopedMNLI
 from looped_transformer.types.data import MNLIBatch
 from looped_transformer.types.mnli import get_logic_relation
 from looped_transformer.types.model import ModelForwardOutput
-
-PrimaryReduction = Literal["final_loop", "mean_across_loops"]
 
 
 @dataclass(frozen=True, slots=True)

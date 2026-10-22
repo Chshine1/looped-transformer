@@ -6,8 +6,8 @@ import torch
 from torch import nn
 
 from looped_transformer.artifacts import get_run_output_dir, write_manifest
-from looped_transformer.config import CommonDataOptions
 from looped_transformer.config import (
+    CommonDataOptions,
     ModelOptions,
     RuntimeOptions,
 )
@@ -77,7 +77,7 @@ class CheckpointLoader:
         self.device = runtime_options.device
         self._checkpoint: dict | None = None
 
-    def load(self, resume_from: str) -> None:
+    def load(self, resume_from: str | Path) -> None:
         checkpoint = torch.load(
             resume_from,
             map_location=self.device,

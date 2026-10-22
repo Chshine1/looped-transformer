@@ -10,6 +10,7 @@ def _path_from_yaml(value: Any) -> Any:
 
 class OptionsModel(BaseModel):
     model_config = ConfigDict(
+        arbitrary_types_allowed=True,
         extra="forbid",
         frozen=True,
         strict=True,
