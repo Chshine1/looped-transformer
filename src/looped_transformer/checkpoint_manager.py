@@ -78,6 +78,8 @@ class CheckpointLoader:
         self._checkpoint: dict | None = None
 
     def load(self, resume_from: str | Path) -> None:
+        if self._checkpoint is not None:
+            return
         checkpoint = torch.load(
             resume_from,
             map_location=self.device,

@@ -123,16 +123,15 @@ class MNLIRunner:
             components.scheduler,
             components.scaler,
         )
+        stage.data_provider.reset_source(
+            shuffle=True, seed=self._runtime_options.seed + state.epoch
+        )
 
-        for batch_index, batch in enumerate(
-            stage.data_reader.get_batches_iterator(
-                shuffle=True,
-                seed=self._runtime_options.seed + state.epoch,
-            )
-        ):
+        batch_index = 0
+        while (batch := stage.data_provider.fetch()) is not None:
             i, o = _data_adapter(batch, self._runtime_options.device, self._tokenizer)
             acc_window_start, acc_window_end = self._get_accumulation_window(
-                stage.data_reader.batch_size, batch_index, stage
+                stage.data_provider.get_batch_size(), batch_index, stage
             )
             with self._runtime_options.autocast:
                 output: ModelTrainOutput = self._model(*i)
@@ -215,7 +214,7 @@ class MNLIRunner:
         batch_size: int, batch_index: int, stage: StageTemplate
     ) -> tuple[int, int]:
         accumulation_steps = stage.gradient_accumulation_steps
-        batches_count = math.ceil(stage.data_reader.count_examples() / batch_size)
+        batches_count = math.ceil(stage.data_provider.get_batches_count() / batch_size)
 
         window_start = (batch_index // accumulation_steps) * accumulation_steps
         window_end = min(window_start + accumulation_steps, batches_count)

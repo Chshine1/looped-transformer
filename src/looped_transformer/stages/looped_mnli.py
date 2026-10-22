@@ -19,7 +19,7 @@ from looped_transformer.config.torch.optimizer import AdamWOptions
 from looped_transformer.config.torch.scheduler import SchedulerOptions
 from looped_transformer.config.torch.scheduler import WarmupCosineOptions
 from looped_transformer.config.training import CommonStageOptions, StageOptions
-from looped_transformer.data_reader import MNLIDataReader
+from looped_transformer.data_reader import MNLIDataProvider
 from looped_transformer.modules.loss import (
     AnchoredSampledLoopCrossEntropyLoss,
 )
@@ -71,7 +71,7 @@ def _build_stage_template(
         raise TypeError("looped_mnli requires LoopedMNLIStageOptions")
 
     data_options = options.common.data
-    data_reader = MNLIDataReader(data_options)
+    data_provider = MNLIDataProvider(data_options)
 
     def get_optimizer(
         named_parameters: Iterable[tuple[str, nn.parameter.Parameter]],
@@ -85,7 +85,7 @@ def _build_stage_template(
         )
 
     def get_scheduler(optimizer: Optimizer) -> LRScheduler:
-        row_count = data_reader.count_examples()
+        row_count = data_provider.get_batches_count()
         batches_per_epoch = math.ceil(row_count / data_options.batch_size)
         steps_per_epoch = math.ceil(
             batches_per_epoch / options.common.gradient_accumulation_steps
@@ -126,7 +126,7 @@ def _build_stage_template(
     common = options.common
     return StageTemplate(
         id=template_id,
-        data_reader=data_reader,
+        data_provider=data_provider,
         loss=_build_loss(options.loss),
         frozen_patterns=common.frozen_patterns,
         evaluation_patterns=common.evaluation_patterns,

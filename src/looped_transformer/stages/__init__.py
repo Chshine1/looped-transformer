@@ -1,6 +1,6 @@
 from looped_transformer.config.data import DataOptions
 from looped_transformer.config.training import TrainingOptions
-from looped_transformer.data_reader import MNLIDataReader
+from looped_transformer.data_reader import MNLIDataProvider
 from looped_transformer.stages import looped_mnli
 from looped_transformer.stages.registry import build_stage_template
 from looped_transformer.types.train import StageTemplate

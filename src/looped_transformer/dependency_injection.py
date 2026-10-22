@@ -1,3 +1,4 @@
+from looped_transformer.types.train import IDataProvider
 from lagom import Alias, Container, Singleton
 from lagom.interfaces import ReadableContainer
 
@@ -9,7 +10,7 @@ from looped_transformer.config import (
     ModelOptions,
     RuntimeOptions,
 )
-from looped_transformer.data_reader import MNLIDataReader
+from looped_transformer.data_reader import MNLIDataProvider
 from looped_transformer.evaluation import Evaluator, StructuredEvaluationLogger
 from looped_transformer.evaluation.options import EvaluationOptions
 from looped_transformer.evaluation.policies import LoopDiagnosticsPolicy
@@ -35,7 +36,7 @@ def configure_evaluation(container: Container, options: EvaluationOptions) -> Co
     evaluation_container = container.clone()
     evaluation_container[EvaluationOptions] = options
     evaluation_container[DataOptions] = options.data
-    evaluation_container[MNLIDataReader] = MNLIDataReader
+    evaluation_container[IDataProvider] = MNLIDataProvider
     evaluation_container[StructuredEvaluationLogger] = Singleton(
         _build_evaluation_logger
     )

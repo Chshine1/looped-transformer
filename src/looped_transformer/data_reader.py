@@ -1,4 +1,5 @@
-from __future__ import annotations
+from pandas import DataFrame
+from typing import override
 
 import json
 import random
@@ -10,11 +11,12 @@ from pathlib import Path
 import pandas as pd
 
 from looped_transformer.artifacts import get_artifact_id, get_file_fingerprint
-from looped_transformer.config import DataOptions, RuntimeOptions
+from looped_transformer.config import DataOptions
 from looped_transformer.types.data import MNLIBatch
+from looped_transformer.types.train import IDataProvider
 
 
-class MNLIDataReader:
+class MNLIDataProvider(IDataProvider[MNLIBatch]):
     CACHE_FORMAT = "mnli-shuffle-chunks-v1"
 
     def __init__(self, data_options: DataOptions):
@@ -22,12 +24,80 @@ class MNLIDataReader:
         self._path = data_options.file_path
 
         self._examples_count: int | None = None
+        self._iterator: Iterator[DataFrame] | None = None
 
-    def get_batches_iterator(
+    @override
+    def reset_source(self, shuffle: bool, seed: int | None) -> None:
+        if self._iterator is not None:
+            del self._iterator
+
+        columns = [
+            self._data_options.premise_column,
+            self._data_options.hypothesis_column,
+            self._data_options.label_column,
+        ]
+
+        if not shuffle:
+            # noinspection argument-list
+            self._iterator = pd.read_csv(
+                self._path,
+                sep="\t",
+                dtype=str,
+                usecols=columns,
+                chunksize=self._data_options.batch_size,
+            )
+            return
+
+        if seed is None:
+            raise ValueError("A seed must be provided")
+
+        chunk_paths = self._prepare_shuffle_chunks()
+        rng = random.Random(seed)
+        rng.shuffle(chunk_paths)
+
+        def create_iterator():
+            pending = pd.DataFrame()
+            for chunk_path in chunk_paths:
+                # noinspection argument-list
+                chunk = pd.read_csv(chunk_path, sep="\t", dtype=str)
+                chunk = chunk.sample(
+                    frac=1,
+                    random_state=rng.randrange(2**32),
+                    ignore_index=True,
+                )
+                if not pending.empty:
+                    chunk = pd.concat((pending, chunk), ignore_index=True)
+
+                batch_size = self._data_options.batch_size
+                complete_rows = len(chunk) - len(chunk) % batch_size
+                for start in range(0, complete_rows, batch_size):
+                    yield chunk.iloc[start : start + batch_size]
+                pending = chunk.iloc[complete_rows:].copy()
+
+            if not pending.empty:
+                yield pending
+
+        self._iterator = create_iterator()
+
+    @override
+    def fetch(self) -> MNLIBatch | None:
+        if self._iterator is None:
+            raise ValueError("A data source must be set first before fetching batches")
+
+        dataframe = next(self._iterator, None)
+        if dataframe is None:
+            return None
+        return MNLIBatch(
+            premises=tuple(dataframe[self._data_options.premise_column].tolist()),
+            hypotheses=tuple(dataframe[self._data_options.hypothesis_column].tolist()),
+            labels=tuple(dataframe[self._data_options.label_column].tolist()),
+        )
+
+    def _get_batches_iterator(
         self,
         shuffle: bool = True,
         seed: int | None = None,
-    ) -> Iterator[MNLIBatch]:
+    ) -> Iterator[DataFrame]:
         columns = [
             self._data_options.premise_column,
             self._data_options.hypothesis_column,
@@ -44,11 +114,12 @@ class MNLIDataReader:
                 chunksize=self._data_options.batch_size,
             )
             for chunk in reader:
-                yield self._to_batch(chunk)
+                yield chunk
             return
 
+        assert seed is not None
         chunk_paths = self._prepare_shuffle_chunks()
-        rng = random.Random(self._data_options.seed if seed is None else seed)
+        rng = random.Random(seed)
         rng.shuffle(chunk_paths)
 
         pending = pd.DataFrame()
@@ -66,13 +137,14 @@ class MNLIDataReader:
             batch_size = self._data_options.batch_size
             complete_rows = len(chunk) - len(chunk) % batch_size
             for start in range(0, complete_rows, batch_size):
-                yield self._to_batch(chunk.iloc[start : start + batch_size])
+                yield chunk.iloc[start : start + batch_size]
             pending = chunk.iloc[complete_rows:].copy()
 
         if not pending.empty:
-            yield self._to_batch(pending)
+            yield pending
 
-    def count_examples(self) -> int:
+    @override
+    def get_batches_count(self) -> int:
         if self._examples_count is not None:
             return self._examples_count
 
@@ -89,13 +161,6 @@ class MNLIDataReader:
         count = sum(len(chunk) for chunk in chunks)
         self._examples_count = count
         return count
-
-    def _to_batch(self, df) -> MNLIBatch:
-        return MNLIBatch(
-            premises=tuple(df[self._data_options.premise_column].tolist()),
-            hypotheses=tuple(df[self._data_options.hypothesis_column].tolist()),
-            labels=tuple(df[self._data_options.label_column].tolist()),
-        )
 
     def _shuffle_spec(self) -> dict:
         return {
@@ -163,7 +228,6 @@ class MNLIDataReader:
             )
             temporary.replace(cache_dir)
         except FileExistsError:
-            # Another process completed the identical cache first.
             shutil.rmtree(temporary, ignore_errors=True)
             return self._prepare_shuffle_chunks()
         except BaseException:
@@ -172,6 +236,6 @@ class MNLIDataReader:
 
         return [cache_dir / name for name in chunk_names]
 
-    @property
-    def batch_size(self):
+    @override
+    def get_batch_size(self) -> int:
         return self._data_options.batch_size
