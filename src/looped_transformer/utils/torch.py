@@ -1,6 +1,7 @@
-import torch
+from typing import Annotated
 
-from looped_transformer.config import RuntimeOptions
+import torch
+from pydantic import BeforeValidator
 
 _DTYPES = {
     "float32": torch.float32,
@@ -9,24 +10,26 @@ _DTYPES = {
 }
 
 
-def resolve_device(options: RuntimeOptions) -> torch.device:
-    if options.device == "cuda":
-        if not torch.cuda.is_available():
-            raise RuntimeError(
-                "CUDA was requested but is unavailable; refusing to silently train on CPU."
-            )
-        if options.cuda_device_index >= torch.cuda.device_count():
-            raise ValueError("cuda_device_index does not identify an available GPU")
-        return torch.device("cuda", options.cuda_device_index)
-    if options.device != "cpu":
-        raise ValueError("runtime.device must be 'cuda' or 'cpu'")
-    return torch.device("cpu")
+def _to_torch_device(value: object) -> torch.device:
+    if isinstance(value, str):
+        return torch.device(value)
+    # noinspection string-conversion-without-dunder-method
+    raise ValueError(f"Cannot convert {value!r} to torch.device")
 
 
-def resolve_dtype(name: str) -> torch.dtype:
-    try:
-        return _DTYPES[name]
-    except KeyError as error:
-        raise ValueError(
-            f"Unsupported dtype {name!r}; choose from {tuple(_DTYPES)}"
-        ) from error
+TorchDevice = Annotated[torch.device, BeforeValidator(_to_torch_device)]
+
+
+def _to_dtype(name: object) -> torch.dtype:
+    if isinstance(name, str):
+        try:
+            return _DTYPES[name]
+        except KeyError as error:
+            raise ValueError(
+                f"Unsupported dtype {name!r}; choose from {tuple(_DTYPES)}"
+            ) from error
+    # noinspection string-conversion-without-dunder-method
+    raise ValueError(f"Cannot convert {name!r} to torch.dtype")
+
+
+TorchDType = Annotated[torch.dtype, BeforeValidator(_to_dtype)]

@@ -10,7 +10,6 @@ from looped_transformer.evaluation.policies import LoopDiagnosticsPolicy
 from looped_transformer.runner import MNLIRunner
 from looped_transformer.stages import build_stage_templates
 from looped_transformer.tokenizer import MNLITokenizer
-from looped_transformer.utils.torch import resolve_device
 
 
 def main() -> None:
@@ -84,7 +83,7 @@ def main() -> None:
         )
         policy = LoopDiagnosticsPolicy(
             max_iterations=options.model.max_iterations,
-            device=resolve_device(options.runtime),
+            device=options.runtime.device,
             label_smoothing=0.05,
             primary_reduction="final_loop",
             shuffle_oracle_repeats=20,

@@ -178,7 +178,9 @@ def main() -> None:
     if args.size is None:
         reference_sizes = [count_rows(path, args.chunk_size) for path in args.reference]
         if not reference_sizes:
-            raise ValueError("at least one reference file is required when size is omitted")
+            raise ValueError(
+                "at least one reference file is required when size is omitted"
+            )
         size = round(sum(reference_sizes) / len(reference_sizes))
         details = ", ".join(
             f"{path}={count}"

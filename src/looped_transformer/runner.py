@@ -1,9 +1,11 @@
+from torch import Tensor
+
+from looped_transformer.types.data import MNLIBatch
 import dataclasses
 import math
 import random
 import re
 from collections.abc import Callable, Sequence
-from contextlib import nullcontext
 
 import torch
 
@@ -19,7 +21,20 @@ from looped_transformer.tokenizer import MNLITokenizer
 from looped_transformer.types.mnli import get_logic_relation
 from looped_transformer.types.model import ModelTrainOutput
 from looped_transformer.types.train import StageTemplate, TrainingState
-from looped_transformer.utils.torch import resolve_device, resolve_dtype
+
+
+def _data_adapter(
+    batch: MNLIBatch, device: torch.device, tokenizer: MNLITokenizer
+) -> tuple[tuple[Tensor, Tensor], tuple[Tensor]]:
+    encoding = tokenizer.encode(batch.premises, batch.hypotheses)
+    input_ids = encoding.input_ids.to(device)
+    attention_mask = encoding.attention_mask.to(device)
+    label_tensor = torch.tensor(
+        [get_logic_relation(label).value for label in batch.labels],
+        dtype=torch.long,
+        device=device,
+    )
+    return (input_ids, attention_mask), (label_tensor,)
 
 
 class MNLIRunner:
@@ -34,39 +49,23 @@ class MNLIRunner:
 
         self._model_options = model_options
         self._runtime_options = runtime_options
-        self._device = resolve_device(runtime_options)
-        self._amp_dtype = resolve_dtype(runtime_options.amp_dtype)
+
         self._configure_runtime()
 
         self._tokenizer = tokenizer
         self._model = LoopedMNLI(model_options, tokenizer.get_tokenizer_info()).to(
-            device=self._device, dtype=resolve_dtype(runtime_options.dtype)
+            device=self._runtime_options.device, dtype=runtime_options.dtype
         )
 
     def _configure_runtime(self) -> None:
         options = self._runtime_options
         random.seed(options.seed)
         torch.manual_seed(options.seed)
-        if self._device.type == "cuda":
+        if self._runtime_options.device.type == "cuda":
             torch.cuda.manual_seed_all(options.seed)
             torch.backends.cuda.matmul.allow_tf32 = options.allow_tf32
             torch.backends.cudnn.allow_tf32 = options.allow_tf32
         torch.use_deterministic_algorithms(options.deterministic)
-
-    def _autocast(self):
-        if (
-            self._runtime_options.amp_enabled
-            and self._device.type == "cpu"
-            and self._amp_dtype == torch.float16
-        ):
-            raise ValueError(
-                "float16 AMP is unsupported on CPU; use bfloat16 or disable AMP"
-            )
-        return (
-            torch.autocast(self._device.type, dtype=self._amp_dtype)
-            if self._runtime_options.amp_enabled
-            else nullcontext()
-        )
 
     def train(self, stages: Sequence[StageTemplate], resume_from: str | None) -> None:
         state = TrainingState(
@@ -76,7 +75,9 @@ class MNLIRunner:
             best_accuracy=-1.0,
         )
 
-        checkpoint_manager = self._checkpoint_manager_factory.create(self._device)
+        checkpoint_manager = self._checkpoint_manager_factory.create(
+            self._runtime_options.device
+        )
         load_components: Callable[[CheckpointComponents], None] | None = None
         if resume_from is not None:
             state, load_components = checkpoint_manager.load(resume_from)
@@ -102,7 +103,9 @@ class MNLIRunner:
                     load_components(components)
                     load_components = None
 
-                stage = dataclasses.replace(stage, loss=stage.loss.to(self._device))
+                stage = dataclasses.replace(
+                    stage, loss=stage.loss.to(self._runtime_options.device)
+                )
                 for _ in range(state.epoch, stage.epochs):
                     self._run_epoch(stage, state, components)
                     state.epoch += 1
@@ -130,20 +133,13 @@ class MNLIRunner:
                 seed=self._runtime_options.seed + state.epoch,
             )
         ):
-            encoding = self._tokenizer.encode(batch.premises, batch.hypotheses)
-            input_ids = encoding.input_ids.to(self._device)
-            attention_mask = encoding.attention_mask.to(self._device)
-            label_tensor = torch.tensor(
-                [get_logic_relation(label).value for label in batch.labels],
-                dtype=torch.long,
-                device=self._device,
-            )
+            i, o = _data_adapter(batch, self._runtime_options.device, self._tokenizer)
             acc_window_start, acc_window_end = self._get_accumulation_window(
                 stage.data_reader.batch_size, batch_index, stage
             )
-            with self._autocast():
-                output: ModelTrainOutput = self._model(input_ids, attention_mask)
-                loss = stage.loss(output, label_tensor)
+            with self._runtime_options.autocast:
+                output: ModelTrainOutput = self._model(*i)
+                loss = stage.loss(output, *o)
                 scaled_loss = loss / (acc_window_end - acc_window_start)
             scaler.scale(scaled_loss).backward()
 
@@ -191,9 +187,9 @@ class MNLIRunner:
         )
         scheduler = stage.scheduler_factory(optimizer)
         scaler = torch.amp.GradScaler(
-            self._device.type,
+            self._runtime_options.device.type,
             enabled=self._runtime_options.amp_enabled
-            and self._amp_dtype == torch.float16,
+            and self._runtime_options.amp_dtype == torch.float16,
         )
         optimizer.zero_grad(set_to_none=True)
 

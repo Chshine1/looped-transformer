@@ -2,8 +2,7 @@ data:
   output_dir: outputs
 
 runtime:
-  device: cuda
-  cuda_device_index: 0
+  device: cuda:0
   dtype: float32
   amp_enabled: false
   amp_dtype: float16
