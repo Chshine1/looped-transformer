@@ -5,13 +5,13 @@ from pathlib import Path
 import torch
 from torch import nn
 
+from looped_transformer.abstractions.training import TrainingState
 from looped_transformer.artifacts import get_run_output_dir, write_manifest
 from looped_transformer.config import (
     CommonDataOptions,
     ModelOptions,
     RuntimeOptions,
 )
-from looped_transformer.types.train import TrainingState
 
 
 @dataclass
@@ -60,7 +60,6 @@ class CheckpointSaver:
             "optimizer": components.optimizer.state_dict(),
             "scheduler": components.scheduler.state_dict(),
             "scaler": components.scaler.state_dict(),
-            "best_accuracy": state.best_accuracy,
             "python_random_state": random.getstate(),
             "torch_random_state": torch.get_rng_state(),
             "cuda_random_state": (
@@ -105,7 +104,6 @@ class CheckpointLoader:
             stage_id=self._checkpoint["stage_id"],
             epoch=int(self._checkpoint["epoch"]),
             global_step=int(self._checkpoint["global_step"]),
-            best_accuracy=float(self._checkpoint["best_accuracy"]),
         )
 
     def load_components(self, components: CheckpointComponents) -> None:

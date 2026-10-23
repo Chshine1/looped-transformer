@@ -1,12 +1,12 @@
-from looped_transformer.config.data import CommonDataOptions
-from typing import cast
 from pathlib import Path
 from typing import Any
+from typing import cast
 
 from hydra import initialize_config_dir, compose
 from omegaconf import DictConfig, OmegaConf
 
 from looped_transformer.config.base import OptionsModel
+from looped_transformer.config.data import CommonDataOptions
 from looped_transformer.config.data import DataOptions
 from looped_transformer.config.model import ModelOptions
 from looped_transformer.config.runtime import RuntimeOptions

@@ -1,17 +1,63 @@
 import argparse
 import json
 from pathlib import Path
+from typing import override
 
+import torch
+from torch import Tensor
+
+from looped_transformer.abstractions.data import MNLIBatch
+from looped_transformer.abstractions.mnli import get_logic_relation
+from looped_transformer.abstractions.model import ModelForwardOutput
+from looped_transformer.abstractions.model import TypedModule
+from looped_transformer.abstractions.training import ModelTrainingCollator
 from looped_transformer.config import DataOptions, load_options
+from looped_transformer.config.evaluation import EvaluationOptions
+from looped_transformer.config.model import ModelOptions
+from looped_transformer.config.runtime import RuntimeOptions
+from looped_transformer.core.evaluation import Evaluator
+from looped_transformer.core.training.model_trainer_factory import ModelTrainerFactory
 from looped_transformer.dependency_injection import (
     build_container,
     configure_evaluation,
 )
-from looped_transformer.evaluation import Evaluator
-from looped_transformer.evaluation.options import EvaluationOptions
-from looped_transformer.evaluation.policies import LoopDiagnosticsPolicy
-from looped_transformer.runner import MNLIRunner
+from looped_transformer.modules.model import LoopedMNLI
+from looped_transformer.policies import LoopDiagnosticsPolicy
 from looped_transformer.stages import build_stage_templates
+from looped_transformer.tokenizer import MNLITokenizer
+
+
+class MNLICollator(ModelTrainingCollator[MNLIBatch, Tensor, Tensor, Tensor]):
+    def __init__(
+        self,
+        tokenizer: MNLITokenizer,
+    ):
+        self._tokenizer = tokenizer
+
+    @override
+    def collate_batch(
+        self, batch: MNLIBatch, device: torch.device, dtype: torch.dtype
+    ) -> tuple[tuple[Tensor, Tensor], Tensor]:
+        encoding = self._tokenizer.encode(batch.premises, batch.hypotheses)
+        input_ids = encoding.input_ids.to(device)
+        attention_mask = encoding.attention_mask.to(device)
+        label_tensor = torch.tensor(
+            [get_logic_relation(label).value for label in batch.labels],
+            dtype=torch.long,
+            device=device,
+        )
+        return (input_ids, attention_mask), label_tensor
+
+
+def _model_factory(
+    model_options: ModelOptions,
+    tokenizer: MNLITokenizer,
+    runtime_options: RuntimeOptions,
+) -> TypedModule[Tensor, Tensor, ModelForwardOutput]:
+    model = LoopedMNLI(model_options, tokenizer.get_tokenizer_info()).to(
+        device=runtime_options.device, dtype=runtime_options.dtype
+    )
+    return TypedModule(model)
 
 
 def main() -> None:
@@ -57,8 +103,13 @@ def main() -> None:
 
     if args.command == "train":
         stages = build_stage_templates(options.model.training)
-        runner = container[MNLIRunner]
-        runner.train(stages, args.resume)
+        trainer_factory = container[ModelTrainerFactory]
+
+        make_model = container.partial(_model_factory)
+        make_collator = container.partial(MNLICollator)
+
+        trainer = trainer_factory.create(make_model(), make_collator())
+        trainer.train(stages, args.resume)
     if args.command == "eval":
         data_options = DataOptions(
             seed=42,

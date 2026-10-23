@@ -1,11 +1,11 @@
-from looped_transformer.modules.masked_mean_pooling import MaskedMeanPooling
 import torch
 from torch import Tensor, nn
 from torch.nn import functional
 
+from looped_transformer.abstractions.halting_cell import HaltingResult
 from looped_transformer.config.model import ModelOptions
+from looped_transformer.modules.masked_mean_pooling import MaskedMeanPooling
 from looped_transformer.modules.multi_head_attention import RoPEMultiHeadAttention
-from looped_transformer.types.halting_cell import HaltingResult
 from looped_transformer.utils.shared_cache import PositionalRoPECache
 
 

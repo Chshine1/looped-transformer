@@ -1,7 +1,7 @@
-from looped_transformer.types.train import IDataProvider
 from lagom import Alias, Container, Singleton
 from lagom.interfaces import ReadableContainer
 
+from looped_transformer.abstractions.training import IDataProvider
 from looped_transformer.checkpoint_manager import CheckpointLoader, CheckpointSaver
 from looped_transformer.config import (
     AppOptions,
@@ -10,12 +10,13 @@ from looped_transformer.config import (
     ModelOptions,
     RuntimeOptions,
 )
+from looped_transformer.config.evaluation import EvaluationOptions
+from looped_transformer.core.evaluation import EvaluationPolicy
+from looped_transformer.core.evaluation import Evaluator
+from looped_transformer.core.evaluation import StructuredEvaluationLogger
+from looped_transformer.core.training.model_trainer_factory import ModelTrainerFactory
 from looped_transformer.data_reader import MNLIDataProvider
-from looped_transformer.evaluation import Evaluator, StructuredEvaluationLogger
-from looped_transformer.evaluation.options import EvaluationOptions
-from looped_transformer.evaluation.policies import LoopDiagnosticsPolicy
-from looped_transformer.evaluation.policy import EvaluationPolicy
-from looped_transformer.runner import MNLIRunner
+from looped_transformer.policies import LoopDiagnosticsPolicy
 from looped_transformer.tokenizer import MNLITokenizer
 
 
@@ -28,7 +29,7 @@ def build_container(options: AppOptions) -> Container:
     container[CheckpointLoader] = CheckpointLoader
     container[CheckpointSaver] = CheckpointSaver
     container[MNLITokenizer] = Singleton(_build_tokenizer)
-    container[MNLIRunner] = MNLIRunner
+    container[ModelTrainerFactory] = Singleton(ModelTrainerFactory)
     return container
 
 
@@ -68,7 +69,6 @@ def _build_loop_diagnostics_policy(
         max_iterations=model.max_iterations,
         device=runtime.device,
         label_smoothing=options.label_smoothing,
-        primary_reduction=options.primary_reduction,
         shuffle_oracle_repeats=options.shuffle_oracle_repeats,
         logger=container[StructuredEvaluationLogger],
     )

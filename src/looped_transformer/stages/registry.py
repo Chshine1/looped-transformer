@@ -2,9 +2,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from looped_transformer.config.data import DataOptions
+from looped_transformer.abstractions.training import StageTemplate
 from looped_transformer.config.training import StageOptions
-from looped_transformer.types.train import StageTemplate
 
 StageBuilder = Callable[[str, StageOptions], StageTemplate]
 

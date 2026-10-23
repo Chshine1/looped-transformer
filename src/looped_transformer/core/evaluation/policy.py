@@ -1,9 +1,9 @@
 from abc import ABC
 from abc import abstractmethod
 
+from looped_transformer.abstractions.data import MNLIBatch
+from looped_transformer.abstractions.model import ModelForwardOutput
 from looped_transformer.modules.model import LoopedMNLI
-from looped_transformer.types.data import MNLIBatch
-from looped_transformer.types.model import ModelForwardOutput
 
 
 class EvaluationPolicy(ABC):

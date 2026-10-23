@@ -1,9 +1,11 @@
-from looped_transformer.config.base import Probability
-from pydantic import Field
 from typing import Annotated
-from looped_transformer.config.base import ExclusiveProbability
 from typing import Literal
+
+from pydantic import Field
+
 from looped_transformer.config import OptionsModel
+from looped_transformer.config.base import ExclusiveProbability
+from looped_transformer.config.base import Probability
 
 
 class WarmupCosineOptions(OptionsModel):

@@ -1,10 +1,10 @@
-from looped_transformer.config.base import NonNegativeInt
 from looped_transformer.config.base import (
     ConfigPath,
     NonEmptyString,
     OptionsModel,
     PositiveInt,
 )
+from looped_transformer.config.base import NonNegativeInt
 
 
 class CommonDataOptions(OptionsModel):

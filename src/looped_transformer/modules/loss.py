@@ -2,13 +2,12 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional
 
-from looped_transformer.types.model import ModelTrainOutput
+from looped_transformer.abstractions.model import ModelTrainOutput, IModule
 
 
 def _cross_entropy_by_time(
     output: ModelTrainOutput, labels: Tensor, label_smoothing: float
 ) -> Tensor:
-    """Return unreduced cross-entropy with shape (iterations, batch)."""
     logits = output["timed_logits"].float()
     iterations, _, classes = logits.shape
     return functional.cross_entropy(
@@ -19,7 +18,9 @@ def _cross_entropy_by_time(
     ).reshape(iterations, -1)
 
 
-class AnchoredSampledLoopCrossEntropyLoss(nn.Module):
+class AnchoredSampledLoopCrossEntropyLoss(
+    nn.Module, IModule[ModelTrainOutput, Tensor, Tensor]
+):
     def __init__(
         self,
         sampled_loops: tuple[int, ...],

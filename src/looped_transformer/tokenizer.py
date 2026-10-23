@@ -8,7 +8,7 @@ from transformers import TensorType
 from transformers.models.bert.tokenization_bert import BertTokenizerFast
 from transformers.utils import PaddingStrategy
 
-from looped_transformer.types.tokenizer import TokenizeResult, TokenizerInfo
+from looped_transformer.abstractions.tokenizer import TokenizeResult, TokenizerInfo
 
 
 class MNLITokenizer:

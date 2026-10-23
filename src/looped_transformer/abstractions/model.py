@@ -25,6 +25,15 @@ class TypedModule[*TIn, TOut]:
     def __call__(self, *args: *TIn) -> TOut:
         return self._typed(*args)
 
+    def to(
+        self,
+        device: torch.device | int | str | None = None,
+        dtype: torch.dtype | None = None,
+        non_blocking: bool = False,
+    ) -> TypedModule[*TIn, TOut]:
+        self._torch.to(device=device, dtype=dtype, non_blocking=non_blocking)
+        return self
+
 
 class ModelTrainOutput(TypedDict):
     mode: Literal["train"]

@@ -1,17 +1,18 @@
 import torch
 from torch import Tensor
 
+from looped_transformer.abstractions.data import MNLIBatch
+from looped_transformer.abstractions.model import ModelForwardOutput
 from looped_transformer.checkpoint_manager import CheckpointLoader
 from looped_transformer.config import ModelOptions, RuntimeOptions
+from looped_transformer.config.evaluation import EvaluationOptions
+from looped_transformer.core.evaluation.policy import EvaluationPolicy
 from looped_transformer.data_reader import MNLIDataProvider
-from looped_transformer.evaluation.options import EvaluationOptions
-from looped_transformer.evaluation.policy import EvaluationPolicy
 from looped_transformer.modules.model import LoopedMNLI
 from looped_transformer.tokenizer import MNLITokenizer
-from looped_transformer.types.data import MNLIBatch
-from looped_transformer.types.model import ModelForwardOutput
 
 
+# todo: generalize this
 def _data_adapter(
     batch: MNLIBatch, device: torch.device, tokenizer: MNLITokenizer
 ) -> tuple[Tensor, Tensor]:

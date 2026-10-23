@@ -2,13 +2,19 @@ import math
 import re
 from collections.abc import Iterable
 from typing import Annotated, ClassVar, Literal
+from typing import Self
 
 import torch
 from pydantic import BeforeValidator, Field, model_validator
+from torch import Tensor
 from torch import nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
+from looped_transformer.abstractions.data import MNLIBatch
+from looped_transformer.abstractions.model import ModelForwardOutput
+from looped_transformer.abstractions.model import TypedModule
+from looped_transformer.abstractions.training import StageTemplate
 from looped_transformer.config.base import (
     ExclusiveProbability,
     NonNegativeFloat,
@@ -24,7 +30,6 @@ from looped_transformer.modules.loss import (
     AnchoredSampledLoopCrossEntropyLoss,
 )
 from looped_transformer.stages.registry import register_stage
-from looped_transformer.types.train import StageTemplate
 
 
 class AnchoredSampledLoopLossOptions(OptionsModel):
@@ -40,7 +45,7 @@ class AnchoredSampledLoopLossOptions(OptionsModel):
     time_rope_regularization_scale: NonNegativeFloat = 0.0
 
     @model_validator(mode="after")
-    def validate_samples(self) -> "AnchoredSampledLoopLossOptions":
+    def validate_samples(self) -> Self:
         if len(self.sampled_loops) != len(self.sampled_weights):
             raise ValueError("sampled_loops and sampled_weights must have equal length")
         if len(set(self.sampled_loops)) != len(self.sampled_loops):
@@ -66,7 +71,7 @@ class LoopedMNLIStageOptions(StageOptions):
 def _build_stage_template(
     template_id: str,
     options: StageOptions,
-) -> StageTemplate:
+) -> StageTemplate[MNLIBatch, ModelForwardOutput, Tensor]:
     if not isinstance(options, LoopedMNLIStageOptions):
         raise TypeError("looped_mnli requires LoopedMNLIStageOptions")
 
@@ -139,15 +144,18 @@ def _build_stage_template(
     )
 
 
-def _build_loss(options: LossOptions) -> nn.Module:
+def _build_loss(
+    options: LossOptions,
+) -> TypedModule[ModelForwardOutput, Tensor, Tensor]:
     if isinstance(options, AnchoredSampledLoopLossOptions):
-        return AnchoredSampledLoopCrossEntropyLoss(
+        loss = AnchoredSampledLoopCrossEntropyLoss(
             sampled_loops=options.sampled_loops,
             sampled_weights=options.sampled_weights,
             sampled_loss_scale=options.sampled_loss_scale,
             label_smoothing=options.label_smoothing,
             time_rope_regularization_scale=options.time_rope_regularization_scale,
         )
+        return TypedModule(loss)
     raise TypeError(f"Unsupported loss options: {type(options).__name__}")
 
 

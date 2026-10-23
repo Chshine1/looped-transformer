@@ -1,11 +1,12 @@
-from looped_transformer.config.base import PositiveInt
+import random
 from contextlib import nullcontext
 
 import torch
 from torch import autocast
 
-from looped_transformer.utils.torch import TorchDType
 from looped_transformer.config.base import NonNegativeInt, OptionsModel
+from looped_transformer.config.base import PositiveInt
+from looped_transformer.utils.torch import TorchDType
 from looped_transformer.utils.torch import TorchDevice
 
 
@@ -34,3 +35,12 @@ class RuntimeOptions(OptionsModel):
             if self.amp_enabled
             else nullcontext()
         )
+
+    def activate(self) -> None:
+        random.seed(self.seed)
+        torch.manual_seed(self.seed)
+        if self.device.type == "cuda":
+            torch.cuda.manual_seed_all(self.seed)
+            torch.backends.cuda.matmul.allow_tf32 = self.allow_tf32
+            torch.backends.cudnn.allow_tf32 = self.allow_tf32
+        torch.use_deterministic_algorithms(self.deterministic)

@@ -1,25 +1,23 @@
-from typing import override
 from dataclasses import dataclass
 from typing import Any
+from typing import override
 
 import torch
 from torch import Tensor
 from torch.nn import functional
 
-from looped_transformer.evaluation.logging import StructuredEvaluationLogger
-from looped_transformer.evaluation.options import PrimaryReduction
-from looped_transformer.evaluation.policy import EvaluationPolicy
+from looped_transformer.abstractions.data import MNLIBatch
+from looped_transformer.abstractions.mnli import get_logic_relation
+from looped_transformer.abstractions.model import ModelForwardOutput
+from looped_transformer.core.evaluation import EvaluationPolicy
+from looped_transformer.core.evaluation import StructuredEvaluationLogger
 from looped_transformer.modules.model import LoopedMNLI
-from looped_transformer.types.data import MNLIBatch
-from looped_transformer.types.mnli import get_logic_relation
-from looped_transformer.types.model import ModelForwardOutput
 
 
 @dataclass(frozen=True, slots=True)
 class BatchDiagnostics:
     batch_index: int
     sample_count: int
-    primary_reduction: PrimaryReduction
     primary: dict[str, float]
     final_loop: dict[str, float]
     mean_across_loops: dict[str, float]
@@ -67,7 +65,6 @@ class LoopDiagnosticsPolicy(EvaluationPolicy):
         max_iterations: int,
         device: torch.device,
         label_smoothing: float,
-        primary_reduction: PrimaryReduction = "final_loop",
         shuffle_oracle_repeats: int = 20,
         shuffle_seed: int = 0,
         logger: StructuredEvaluationLogger | None = None,
@@ -76,17 +73,12 @@ class LoopDiagnosticsPolicy(EvaluationPolicy):
             raise ValueError("max_iterations must be positive")
         if not 0 <= label_smoothing < 1:
             raise ValueError("label_smoothing must be in [0, 1)")
-        if primary_reduction not in {"final_loop", "mean_across_loops"}:
-            raise ValueError(
-                "primary_reduction must be 'final_loop' or 'mean_across_loops'"
-            )
         if shuffle_oracle_repeats <= 0:
             raise ValueError("shuffle_oracle_repeats must be positive")
 
         self._max_iterations = max_iterations
         self._device = device
         self._label_smoothing = label_smoothing
-        self._primary_reduction: PrimaryReduction = primary_reduction
         self._shuffle_oracle_repeats = shuffle_oracle_repeats
         self._shuffle_seed = shuffle_seed
         self._logger = logger
@@ -287,14 +279,9 @@ class LoopDiagnosticsPolicy(EvaluationPolicy):
             .item(),
         }
 
-        if self._primary_reduction == "final_loop":
-            primary_raw = final_raw
-            primary_smooth = final_smooth
-            primary_correct = final_correct.float()
-        else:
-            primary_raw = mean_raw
-            primary_smooth = mean_smooth
-            primary_correct = mean_correct
+        primary_raw = final_raw
+        primary_smooth = final_smooth
+        primary_correct = final_correct.float()
 
         self._primary_totals.add(primary_raw, primary_smooth, primary_correct)
         self._final_loop_totals.add(final_raw, final_smooth, final_correct)
@@ -354,7 +341,6 @@ class LoopDiagnosticsPolicy(EvaluationPolicy):
         batch_diagnostics = BatchDiagnostics(
             batch_index=self._batch_count,
             sample_count=sample_count,
-            primary_reduction=self._primary_reduction,
             primary=self._metrics(primary_raw, primary_smooth, primary_correct),
             final_loop=self._metrics(final_raw, final_smooth, final_correct),
             mean_across_loops=self._metrics(mean_raw, mean_smooth, mean_correct),
@@ -476,7 +462,6 @@ class LoopDiagnosticsPolicy(EvaluationPolicy):
         return {
             "batch_count": self._batch_count,
             "sample_count": sample_count,
-            "primary_reduction": self._primary_reduction,
             "primary": self._primary_totals.means(sample_count),
             "final_loop": final_metrics,
             "mean_across_loops": self._mean_loop_totals.means(sample_count),

@@ -1,18 +1,18 @@
-from typing import override
 from typing import Any
+from typing import override
 
 import torch
 from torch import Tensor, nn
 from torch.nn import functional
 from torch.utils.hooks import RemovableHandle
 
+from looped_transformer.abstractions.data import MNLIBatch
+from looped_transformer.abstractions.mnli import get_logic_relation
+from looped_transformer.abstractions.model import ModelForwardOutput
 from looped_transformer.config import ModelOptions, RuntimeOptions
-from looped_transformer.evaluation import EvaluationPolicy
+from looped_transformer.core.evaluation import EvaluationPolicy
 from looped_transformer.modules.controller_teacher import ControllerTeacher
 from looped_transformer.modules.model import LoopedMNLI
-from looped_transformer.types.data import MNLIBatch
-from looped_transformer.types.mnli import get_logic_relation
-from looped_transformer.types.model import ModelForwardOutput
 
 
 class ControllerTeacherTrainingPolicy(EvaluationPolicy):

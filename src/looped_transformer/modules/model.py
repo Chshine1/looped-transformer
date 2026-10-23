@@ -1,17 +1,17 @@
-from looped_transformer.types.model import IModule
 import math
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 
+from looped_transformer.abstractions.model import IModule
+from looped_transformer.abstractions.model import ModelForwardOutput
+from looped_transformer.abstractions.tokenizer import TokenizerInfo
 from looped_transformer.config.model import ModelOptions
 from looped_transformer.modules.attn_res import AttnRes
 from looped_transformer.modules.halting_cell import HaltingCell, HaltingResult
 from looped_transformer.modules.masked_mean_pooling import MaskedMeanPooling
 from looped_transformer.modules.swi_glu_transformer_block import SwiGLUTransformerBlock
-from looped_transformer.types.model import ModelForwardOutput
-from looped_transformer.types.tokenizer import TokenizerInfo
 from looped_transformer.utils.shared_cache import (
     PositionalRoPECache,
     TimedMultiHeadRoPECache,

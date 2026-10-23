@@ -1,6 +1,6 @@
+from abc import ABC, abstractmethod
+
 import torch
-from abc import abstractmethod
-from abc import ABC
 
 
 class ModelTrainingCollator[TBatch, *TModelInput, TLossInput](ABC):

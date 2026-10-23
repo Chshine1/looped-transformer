@@ -9,10 +9,10 @@ from typing import override
 import pandas as pd
 from pandas import DataFrame
 
+from looped_transformer.abstractions.data import MNLIBatch
+from looped_transformer.abstractions.training import IDataProvider
 from looped_transformer.artifacts import get_artifact_id, get_file_fingerprint
 from looped_transformer.config import DataOptions
-from looped_transformer.types.data import MNLIBatch
-from looped_transformer.types.train import IDataProvider
 
 
 class MNLIDataProvider(IDataProvider[MNLIBatch]):
