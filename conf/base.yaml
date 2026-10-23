@@ -9,6 +9,7 @@ runtime:
   seed: 42
   allow_tf32: true
   deterministic: false
+  log_every_steps: 50
 
 model:
   hidden_state_dimension: 256
@@ -33,7 +34,6 @@ model:
     hazard_baseline_scale: -2.0
     hazard_adjustment_scale: 0.9
   training:
-    log_every_steps: 50
     stages:
       - backbone_warmup
     stage_templates:

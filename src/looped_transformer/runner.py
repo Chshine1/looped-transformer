@@ -1,3 +1,5 @@
+from typing import override
+from looped_transformer.collator import ModelTrainingCollator
 import dataclasses
 import math
 import random
@@ -18,45 +20,61 @@ from looped_transformer.modules.model import LoopedMNLI
 from looped_transformer.tokenizer import MNLITokenizer
 from looped_transformer.types.data import MNLIBatch
 from looped_transformer.types.mnli import get_logic_relation
-from looped_transformer.types.model import ModelTrainOutput
+from looped_transformer.types.model import ModelForwardOutput
+from looped_transformer.types.model import TypedModule
 from looped_transformer.types.train import StageTemplate, TrainingState
 
 
-def _data_adapter(
-    batch: MNLIBatch, device: torch.device, tokenizer: MNLITokenizer
-) -> tuple[tuple[Tensor, Tensor], tuple[Tensor]]:
-    encoding = tokenizer.encode(batch.premises, batch.hypotheses)
-    input_ids = encoding.input_ids.to(device)
-    attention_mask = encoding.attention_mask.to(device)
-    label_tensor = torch.tensor(
-        [get_logic_relation(label).value for label in batch.labels],
-        dtype=torch.long,
-        device=device,
+class MNLICollator(ModelTrainingCollator[MNLIBatch, Tensor, Tensor, Tensor]):
+    def __init__(
+        self,
+        tokenizer: MNLITokenizer,
+    ):
+        self._tokenizer = tokenizer
+
+    @override
+    def collate_batch(
+        self, batch: MNLIBatch, device: torch.device, dtype: torch.dtype
+    ) -> tuple[tuple[Tensor, Tensor], Tensor]:
+        encoding = self._tokenizer.encode(batch.premises, batch.hypotheses)
+        input_ids = encoding.input_ids.to(device)
+        attention_mask = encoding.attention_mask.to(device)
+        label_tensor = torch.tensor(
+            [get_logic_relation(label).value for label in batch.labels],
+            dtype=torch.long,
+            device=device,
+        )
+        return (input_ids, attention_mask), label_tensor
+
+
+def _model_factory(
+    model_options: ModelOptions,
+    tokenizer: MNLITokenizer,
+    runtime_options: RuntimeOptions,
+) -> TypedModule[Tensor, Tensor, ModelForwardOutput]:
+    model = LoopedMNLI(model_options, tokenizer.get_tokenizer_info()).to(
+        device=runtime_options.device, dtype=runtime_options.dtype
     )
-    return (input_ids, attention_mask), (label_tensor,)
+    return TypedModule(model)
 
 
 class MNLIRunner:
     def __init__(
         self,
-        tokenizer: MNLITokenizer,
+        collator: ModelTrainingCollator[MNLIBatch, Tensor, Tensor, Tensor],
+        model: TypedModule[Tensor, Tensor, ModelForwardOutput],
         checkpoint_saver: CheckpointSaver,
         checkpoint_loader: CheckpointLoader,
-        model_options: ModelOptions,
         runtime_options: RuntimeOptions,
     ):
+        self._collator = collator
         self._checkpoint_saver = checkpoint_saver
         self._checkpoint_loader = checkpoint_loader
 
-        self._model_options = model_options
         self._runtime_options = runtime_options
 
         self._configure_runtime()
-
-        self._tokenizer = tokenizer
-        self._model = LoopedMNLI(model_options, tokenizer.get_tokenizer_info()).to(
-            device=self._runtime_options.device, dtype=runtime_options.dtype
-        )
+        self._model = model
 
     def _configure_runtime(self) -> None:
         options = self._runtime_options
@@ -76,7 +94,7 @@ class MNLIRunner:
             best_accuracy=-1.0,
         )
 
-        was_training = self._model.training
+        was_training = self._model.torch.training
         try:
             if resume_from is not None:
                 self._checkpoint_loader.load(resume_from)
@@ -93,7 +111,7 @@ class MNLIRunner:
                         f"Checkpoint stage is not configured: {state.stage_id!r}"
                     )
 
-            self._model.train()
+            self._model.torch.train()
             for stage in stages[beginning_stage_index:]:
                 components = self._on_stage_begin(stage, state)
                 if resume_from is not None:
@@ -112,7 +130,7 @@ class MNLIRunner:
                 state.epoch = 0
         finally:
             self._checkpoint_loader.dispose()
-            self._model.train(was_training)
+            self._model.torch.train(was_training)
 
     def _run_epoch(
         self,
@@ -132,15 +150,15 @@ class MNLIRunner:
         try:
             batch_index = 0
             while (batch := stage.data_provider.fetch()) is not None:
-                i, o = _data_adapter(
-                    batch, self._runtime_options.device, self._tokenizer
+                i, o = self._collator.collate_batch(
+                    batch, self._runtime_options.device, self._runtime_options.dtype
                 )
                 acc_window_start, acc_window_end = self._get_accumulation_window(
                     stage.data_provider.get_batch_size(), batch_index, stage
                 )
                 with self._runtime_options.autocast:
-                    output: ModelTrainOutput = self._model(*i)
-                    loss = stage.loss(output, *o)
+                    output = self._model(*i)
+                    loss = stage.loss(output, o)
                     scaled_loss = loss / (acc_window_end - acc_window_start)
                 scaler.scale(scaled_loss).backward()
 
@@ -149,7 +167,7 @@ class MNLIRunner:
 
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(
-                    self._model.parameters(), stage.max_gradient_norm
+                    self._model.torch.parameters(), stage.max_gradient_norm
                 )
                 scale_before = scaler.get_scale()
                 scaler.step(optimizer)
@@ -162,10 +180,7 @@ class MNLIRunner:
 
                 scheduler.step()
                 state.global_step += 1
-                if (
-                    state.global_step % self._model_options.training.log_every_steps
-                    == 0
-                ):
+                if state.global_step % self._runtime_options.log_every_steps == 0:
                     print(
                         f"epoch={state.epoch + 1} step={state.global_step} "
                         f"lr={scheduler.get_last_lr()[0]:.3e}"
@@ -177,9 +192,9 @@ class MNLIRunner:
         self, stage: StageTemplate, state: TrainingState
     ) -> CheckpointComponents:
         state.stage_id = stage.id
-        for name, param in self._model.named_parameters():
+        for name, param in self._model.torch.named_parameters():
             param.requires_grad = not bool(re.match(stage.frozen_patterns, name))
-        for name, module in self._model.named_modules():
+        for name, module in self._model.torch.named_modules():
             if name == "":
                 continue
             module.train(not bool(re.match(stage.evaluation_patterns, name)))
@@ -187,7 +202,7 @@ class MNLIRunner:
         optimizer = stage.optimizer_factory(
             (
                 (name, parameter)
-                for name, parameter in self._model.named_parameters()
+                for name, parameter in self._model.torch.named_parameters()
                 if parameter.requires_grad
             )
         )
@@ -200,7 +215,7 @@ class MNLIRunner:
         optimizer.zero_grad(set_to_none=True)
 
         components = CheckpointComponents(
-            model=self._model,
+            model=self._model.torch,
             optimizer=optimizer,
             scheduler=scheduler,
             scaler=scaler,
@@ -224,7 +239,7 @@ class MNLIRunner:
         batch_size: int, batch_index: int, stage: StageTemplate
     ) -> tuple[int, int]:
         accumulation_steps = stage.gradient_accumulation_steps
-        batches_count = math.ceil(stage.data_provider.get_batches_count() / batch_size)
+        batches_count = math.ceil(stage.data_provider.get_samples_count() / batch_size)
 
         window_start = (batch_index // accumulation_steps) * accumulation_steps
         window_end = min(window_start + accumulation_steps, batches_count)

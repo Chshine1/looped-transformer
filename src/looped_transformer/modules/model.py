@@ -1,3 +1,4 @@
+from looped_transformer.types.model import IModule
 import math
 
 import torch
@@ -18,7 +19,7 @@ from looped_transformer.utils.shared_cache import (
 )
 
 
-class LoopedMNLI(nn.Module):
+class LoopedMNLI(nn.Module, IModule[Tensor, Tensor, ModelForwardOutput]):
     class _MultiHeadRotation(nn.Module):
         _timed_rope_cache: TimedMultiHeadRoPECache
 

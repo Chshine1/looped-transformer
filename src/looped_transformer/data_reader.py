@@ -147,7 +147,7 @@ class MNLIDataProvider(IDataProvider[MNLIBatch]):
             yield pending
 
     @override
-    def get_batches_count(self) -> int:
+    def get_samples_count(self) -> int:
         if self._examples_count is not None:
             return self._examples_count
 

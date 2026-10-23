@@ -1,3 +1,4 @@
+from looped_transformer.config.base import PositiveInt
 from contextlib import nullcontext
 
 import torch
@@ -16,6 +17,7 @@ class RuntimeOptions(OptionsModel):
     seed: NonNegativeInt
     allow_tf32: bool
     deterministic: bool
+    log_every_steps: PositiveInt
 
     @property
     def autocast(self) -> autocast | nullcontext:

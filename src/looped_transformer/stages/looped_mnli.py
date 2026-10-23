@@ -85,7 +85,7 @@ def _build_stage_template(
         )
 
     def get_scheduler(optimizer: Optimizer) -> LRScheduler:
-        row_count = data_provider.get_batches_count()
+        row_count = data_provider.get_samples_count()
         batches_per_epoch = math.ceil(row_count / data_options.batch_size)
         steps_per_epoch = math.ceil(
             batches_per_epoch / options.common.gradient_accumulation_steps

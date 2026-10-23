@@ -19,7 +19,7 @@ class TrainingState:
 
 class IDataProvider[TBatch](ABC):
     @abstractmethod
-    def get_batches_count(self) -> int:
+    def get_samples_count(self) -> int:
         pass
 
     @abstractmethod

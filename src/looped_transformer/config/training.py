@@ -35,7 +35,6 @@ class StageOptions(OptionsModel):
 class TrainingOptions(OptionsModel):
     stage_templates: dict[NonEmptyString, SerializeAsAny[StageOptions]]
     stages: list[NonEmptyString] = Field(min_length=1)
-    log_every_steps: PositiveInt = 50
 
     @field_validator("stage_templates", mode="before")
     @classmethod
