@@ -1,5 +1,5 @@
 from __future__ import annotations
-from looped_transformer.config.data import CommonDataOptions
+
 import hashlib
 import json
 import uuid
@@ -11,7 +11,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from looped_transformer.config import DataOptions, ModelOptions, RuntimeOptions
+from looped_transformer.config import ModelOptions, RuntimeOptions
+from looped_transformer.config.data import CommonDataOptions
 
 
 def _canonicalize(value: Any) -> Any:
@@ -47,8 +48,7 @@ def get_artifact_id(value: Any, length: int = 16) -> str:
 
 
 @lru_cache(maxsize=16)
-def _sha256(path: str, size: int, modified_ns: int) -> str:
-    del size, modified_ns  # They form part of the cache key.
+def _sha256(path: str, _size: int, _modified_ns: int) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):

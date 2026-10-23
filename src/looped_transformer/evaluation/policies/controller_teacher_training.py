@@ -1,3 +1,4 @@
+from typing import override
 from typing import Any
 
 import torch
@@ -16,6 +17,7 @@ from looped_transformer.types.model import ModelForwardOutput
 
 class ControllerTeacherTrainingPolicy(EvaluationPolicy):
     class _Loss(nn.Module):
+        # noinspection method-may-be-static
         def forward(
             self,
             loop_logits: Tensor,
@@ -74,6 +76,7 @@ class ControllerTeacherTrainingPolicy(EvaluationPolicy):
         self._epoch_batches = 0
         self._global_step = 0
 
+    @override
     def reset(self, model: LoopedMNLI) -> None:
         self.close()
         self._model.train()
@@ -92,12 +95,20 @@ class ControllerTeacherTrainingPolicy(EvaluationPolicy):
             rotation, _ignored_state = input_args
             self._batch_aligned_states[-rotation - 1] = output.detach()
 
-        self._hook_handles.append(model.register_forward_pre_hook(capture_inputs))
-        # noinspection protected-member
-        self._hook_handles.append(
-            model._alignment_rotation.register_forward_hook(capture_aligned_state)
-        )
+        handles: list[RemovableHandle] = []
+        try:
+            handles.append(model.register_forward_pre_hook(capture_inputs))
+            # noinspection protected-member
+            handles.append(
+                model._alignment_rotation.register_forward_hook(capture_aligned_state)
+            )
+        except BaseException:
+            for handle in handles:
+                handle.remove()
+            raise
+        self._hook_handles.extend(handles)
 
+    @override
     def attend_batch(self, batch: MNLIBatch, output: ModelForwardOutput) -> None:
         padding_mask = self._padding_mask
         states = self._batch_aligned_states
@@ -160,6 +171,7 @@ class ControllerTeacherTrainingPolicy(EvaluationPolicy):
         self._scaler.load_state_dict(state["scaler"])
         self._global_step = int(state["global_step"])
 
+    @override
     def close(self) -> None:
         for handle in self._hook_handles:
             handle.remove()

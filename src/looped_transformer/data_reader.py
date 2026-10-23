@@ -1,14 +1,13 @@
-from pandas import DataFrame
-from typing import override
-
 import json
 import random
 import shutil
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
+from typing import override
 
 import pandas as pd
+from pandas import DataFrame
 
 from looped_transformer.artifacts import get_artifact_id, get_file_fingerprint
 from looped_transformer.config import DataOptions
@@ -28,8 +27,7 @@ class MNLIDataProvider(IDataProvider[MNLIBatch]):
 
     @override
     def reset_source(self, shuffle: bool, seed: int | None) -> None:
-        if self._iterator is not None:
-            del self._iterator
+        self.close()
 
         columns = [
             self._data_options.premise_column,
@@ -84,8 +82,13 @@ class MNLIDataProvider(IDataProvider[MNLIBatch]):
         if self._iterator is None:
             raise ValueError("A data source must be set first before fetching batches")
 
-        dataframe = next(self._iterator, None)
+        try:
+            dataframe = next(self._iterator, None)
+        except BaseException:
+            self.close()
+            raise
         if dataframe is None:
+            self.close()
             return None
         return MNLIBatch(
             premises=tuple(dataframe[self._data_options.premise_column].tolist()),
@@ -113,8 +116,8 @@ class MNLIDataProvider(IDataProvider[MNLIBatch]):
                 usecols=columns,
                 chunksize=self._data_options.batch_size,
             )
-            for chunk in reader:
-                yield chunk
+            with reader:
+                yield from reader
             return
 
         assert seed is not None
@@ -158,7 +161,8 @@ class MNLIDataProvider(IDataProvider[MNLIBatch]):
             usecols=[label_col],
             chunksize=100_000,
         )
-        count = sum(len(chunk) for chunk in chunks)
+        with chunks:
+            count = sum(len(chunk) for chunk in chunks)
         self._examples_count = count
         return count
 
@@ -210,16 +214,17 @@ class MNLIDataProvider(IDataProvider[MNLIBatch]):
                 usecols=spec["columns"],
                 chunksize=self._data_options.shuffle_chunk_size,
             )
-            for index, chunk in enumerate(reader):
-                name = f"chunk-{index:06d}.tsv"
-                chunk.to_csv(
-                    temporary / name,
-                    sep="\t",
-                    index=False,
-                    encoding="utf-8",
-                    lineterminator="\n",
-                )
-                chunk_names.append(name)
+            with reader:
+                for index, chunk in enumerate(reader):
+                    name = f"chunk-{index:06d}.tsv"
+                    chunk.to_csv(
+                        temporary / name,
+                        sep="\t",
+                        index=False,
+                        encoding="utf-8",
+                        lineterminator="\n",
+                    )
+                    chunk_names.append(name)
 
             manifest = {"id": identifier, "spec": spec, "chunks": chunk_names}
             (temporary / "manifest.json").write_text(
@@ -239,3 +244,12 @@ class MNLIDataProvider(IDataProvider[MNLIBatch]):
     @override
     def get_batch_size(self) -> int:
         return self._data_options.batch_size
+
+    @override
+    def close(self) -> None:
+        iterator, self._iterator = self._iterator, None
+        if iterator is None:
+            return
+        close = getattr(iterator, "close", None)
+        if close is not None:
+            close()

@@ -9,8 +9,8 @@ from torch import Tensor
 
 from looped_transformer.checkpoint_manager import (
     CheckpointComponents,
-    CheckpointSaver,
     CheckpointLoader,
+    CheckpointSaver,
 )
 from looped_transformer.config.model import ModelOptions
 from looped_transformer.config.runtime import RuntimeOptions
@@ -76,29 +76,30 @@ class MNLIRunner:
             best_accuracy=-1.0,
         )
 
-        if resume_from is not None:
-            self._checkpoint_loader.load(resume_from)
-            state = self._checkpoint_loader.load_training_state()
-
-        beginning_stage_index = 0
-        if state.stage_id:
-            beginning_stage_index = next(
-                (i for i, stage in enumerate(stages) if stage.id == state.stage_id),
-                -1,
-            )
-            if beginning_stage_index < 0:
-                raise ValueError(
-                    f"Checkpoint stage is not configured: {state.stage_id!r}"
-                )
-
         was_training = self._model.training
         try:
+            if resume_from is not None:
+                self._checkpoint_loader.load(resume_from)
+                state = self._checkpoint_loader.load_training_state()
+
+            beginning_stage_index = 0
+            if state.stage_id:
+                beginning_stage_index = next(
+                    (i for i, stage in enumerate(stages) if stage.id == state.stage_id),
+                    -1,
+                )
+                if beginning_stage_index < 0:
+                    raise ValueError(
+                        f"Checkpoint stage is not configured: {state.stage_id!r}"
+                    )
+
             self._model.train()
             for stage in stages[beginning_stage_index:]:
                 components = self._on_stage_begin(stage, state)
                 if resume_from is not None:
                     self._checkpoint_loader.load_components(components)
                     self._checkpoint_loader.dispose()
+                    resume_from = None
 
                 stage = dataclasses.replace(
                     stage, loss=stage.loss.to(self._runtime_options.device)
@@ -110,6 +111,7 @@ class MNLIRunner:
 
                 state.epoch = 0
         finally:
+            self._checkpoint_loader.dispose()
             self._model.train(was_training)
 
     def _run_epoch(
@@ -127,41 +129,49 @@ class MNLIRunner:
             shuffle=True, seed=self._runtime_options.seed + state.epoch
         )
 
-        batch_index = 0
-        while (batch := stage.data_provider.fetch()) is not None:
-            i, o = _data_adapter(batch, self._runtime_options.device, self._tokenizer)
-            acc_window_start, acc_window_end = self._get_accumulation_window(
-                stage.data_provider.get_batch_size(), batch_index, stage
-            )
-            with self._runtime_options.autocast:
-                output: ModelTrainOutput = self._model(*i)
-                loss = stage.loss(output, *o)
-                scaled_loss = loss / (acc_window_end - acc_window_start)
-            scaler.scale(scaled_loss).backward()
-
-            if batch_index + 1 != acc_window_end:
-                continue
-
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(
-                self._model.parameters(), stage.max_gradient_norm
-            )
-            scale_before = scaler.get_scale()
-            scaler.step(optimizer)
-            scaler.update()
-            scale_after = scaler.get_scale()
-            optimizer.zero_grad(set_to_none=True)
-
-            if scale_after < scale_before:
-                continue
-
-            scheduler.step()
-            state.global_step += 1
-            if state.global_step % self._model_options.training.log_every_steps == 0:
-                print(
-                    f"epoch={state.epoch + 1} step={state.global_step} "
-                    f"lr={scheduler.get_last_lr()[0]:.3e}"
+        try:
+            batch_index = 0
+            while (batch := stage.data_provider.fetch()) is not None:
+                i, o = _data_adapter(
+                    batch, self._runtime_options.device, self._tokenizer
                 )
+                acc_window_start, acc_window_end = self._get_accumulation_window(
+                    stage.data_provider.get_batch_size(), batch_index, stage
+                )
+                with self._runtime_options.autocast:
+                    output: ModelTrainOutput = self._model(*i)
+                    loss = stage.loss(output, *o)
+                    scaled_loss = loss / (acc_window_end - acc_window_start)
+                scaler.scale(scaled_loss).backward()
+
+                if batch_index + 1 != acc_window_end:
+                    continue
+
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(
+                    self._model.parameters(), stage.max_gradient_norm
+                )
+                scale_before = scaler.get_scale()
+                scaler.step(optimizer)
+                scaler.update()
+                scale_after = scaler.get_scale()
+                optimizer.zero_grad(set_to_none=True)
+
+                if scale_after < scale_before:
+                    continue
+
+                scheduler.step()
+                state.global_step += 1
+                if (
+                    state.global_step % self._model_options.training.log_every_steps
+                    == 0
+                ):
+                    print(
+                        f"epoch={state.epoch + 1} step={state.global_step} "
+                        f"lr={scheduler.get_last_lr()[0]:.3e}"
+                    )
+        finally:
+            stage.data_provider.close()
 
     def _on_stage_begin(
         self, stage: StageTemplate, state: TrainingState

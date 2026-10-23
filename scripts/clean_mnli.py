@@ -37,7 +37,6 @@ class CleaningReport:
 
 
 def missing_marker(values: pd.Series) -> pd.Series:
-    """Find empty and textual NA values without letting pandas coerce them."""
     normalized = values.astype("string").str.strip().str.casefold()
     return values.isna() | normalized.isin(MISSING_MARKERS)
 
@@ -83,55 +82,58 @@ def clean_file(source: Path, destination: Path, chunk_size: int) -> CleaningRepo
             engine="python",
             on_bad_lines=skip_bad_line,
         )
-        for chunk in chunks:
-            report.input_rows += len(chunk)
-            rejected = pd.Series(False, index=chunk.index)
+        with chunks:
+            for chunk in chunks:
+                report.input_rows += len(chunk)
+                rejected = pd.Series(False, index=chunk.index)
 
-            malformed = chunk.isna().any(axis="columns")
-            report.reject("wrong field count", chunk.loc[malformed, "index"])
-            rejected |= malformed
+                malformed = chunk.isna().any(axis="columns")
+                report.reject("wrong field count", chunk.loc[malformed, "index"])
+                rejected |= malformed
 
-            duplicate_header = chunk["index"].eq("index")
-            report.reject("repeated header", chunk.loc[duplicate_header, "index"])
-            rejected |= duplicate_header
+                duplicate_header = chunk["index"].eq("index")
+                report.reject("repeated header", chunk.loc[duplicate_header, "index"])
+                rejected |= duplicate_header
 
-            invalid_index = pd.to_numeric(chunk["index"], errors="coerce").isna()
-            invalid_index &= ~duplicate_header
-            report.reject("invalid index", chunk.loc[invalid_index, "index"])
-            rejected |= invalid_index
+                invalid_index = pd.to_numeric(chunk["index"], errors="coerce").isna()
+                invalid_index &= ~duplicate_header
+                report.reject("invalid index", chunk.loc[invalid_index, "index"])
+                rejected |= invalid_index
 
-            duplicate_index = (
-                chunk["index"].isin(seen_indices) | chunk["index"].duplicated()
-            )
-            duplicate_index &= ~rejected
-            report.reject("duplicate index", chunk.loc[duplicate_index, "index"])
-            rejected |= duplicate_index
+                duplicate_index = (
+                    chunk["index"].isin(seen_indices) | chunk["index"].duplicated()
+                )
+                duplicate_index &= ~rejected
+                report.reject("duplicate index", chunk.loc[duplicate_index, "index"])
+                rejected |= duplicate_index
 
-            for column in TEXT_COLUMNS:
-                invalid_text = missing_marker(chunk[column]) & ~rejected
-                report.reject(f"missing {column}", chunk.loc[invalid_text, "index"])
-                rejected |= invalid_text
+                for column in TEXT_COLUMNS:
+                    invalid_text = missing_marker(chunk[column]) & ~rejected
+                    report.reject(f"missing {column}", chunk.loc[invalid_text, "index"])
+                    rejected |= invalid_text
 
-            if "gold_label" in chunk:
-                normalized_labels = chunk["gold_label"].str.strip().str.casefold()
-                invalid_label = ~normalized_labels.isin(VALID_LABELS) & ~rejected
-                report.reject("invalid gold_label", chunk.loc[invalid_label, "index"])
-                rejected |= invalid_label
-                chunk.loc[:, "gold_label"] = normalized_labels
+                if "gold_label" in chunk:
+                    normalized_labels = chunk["gold_label"].str.strip().str.casefold()
+                    invalid_label = ~normalized_labels.isin(VALID_LABELS) & ~rejected
+                    report.reject(
+                        "invalid gold_label", chunk.loc[invalid_label, "index"]
+                    )
+                    rejected |= invalid_label
+                    chunk.loc[:, "gold_label"] = normalized_labels
 
-            accepted = chunk.loc[~rejected]
-            seen_indices.update(accepted["index"])
-            accepted.to_csv(
-                temporary,
-                sep="\t",
-                index=False,
-                mode="a" if wrote_header else "w",
-                header=not wrote_header,
-                encoding="utf-8",
-                lineterminator="\n",
-            )
-            wrote_header = True
-            report.output_rows += len(accepted)
+                accepted = chunk.loc[~rejected]
+                seen_indices.update(accepted["index"])
+                accepted.to_csv(
+                    temporary,
+                    sep="\t",
+                    index=False,
+                    mode="a" if wrote_header else "w",
+                    header=not wrote_header,
+                    encoding="utf-8",
+                    lineterminator="\n",
+                )
+                wrote_header = True
+                report.output_rows += len(accepted)
 
         if not wrote_header:
             header.to_csv(temporary, sep="\t", index=False, encoding="utf-8")

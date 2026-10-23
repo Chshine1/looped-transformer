@@ -1,3 +1,4 @@
+from typing import override
 from dataclasses import dataclass
 from typing import Any
 
@@ -136,11 +137,15 @@ class LoopDiagnosticsPolicy(EvaluationPolicy):
         self._final_prediction_histogram: Tensor | None = None
         self._per_loop_prediction_histogram: Tensor | None = None
 
+    @override
     def reset(self, model: LoopedMNLI) -> None:
-        del model
         self._initialize_state()
         if self._logger is not None:
             self._logger.start()
+
+    @override
+    def close(self) -> None:
+        pass
 
     @staticmethod
     def _cross_entropy_by_loop(
@@ -222,6 +227,7 @@ class LoopDiagnosticsPolicy(EvaluationPolicy):
             torch.stack(correct_values),
         )
 
+    @override
     def attend_batch(self, batch: MNLIBatch, output: ModelForwardOutput) -> None:
         timed_logits = output["timed_logits"].float()
         self._validate_output(timed_logits)

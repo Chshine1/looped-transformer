@@ -1,5 +1,4 @@
-from abc import ABC
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
@@ -7,7 +6,7 @@ from torch import nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
-from looped_transformer.data_reader import MNLIDataProvider
+from looped_transformer.types.data import MNLIBatch
 
 
 @dataclass
@@ -16,23 +15,6 @@ class TrainingState:
     epoch: int
     global_step: int
     best_accuracy: float
-
-
-@dataclass(frozen=True, slots=True)
-class StageTemplate:
-    id: str
-    data_provider: MNLIDataProvider
-    loss: nn.Module
-    frozen_patterns: str
-    evaluation_patterns: str
-    optimizer_factory: Callable[
-        [Iterable[tuple[str, nn.parameter.Parameter]]], Optimizer
-    ]
-    scheduler_factory: Callable[[Optimizer], LRScheduler]
-    epochs: int
-    max_gradient_norm: float
-    gradient_accumulation_steps: int
-    save_every_epochs: int
 
 
 class IDataProvider[TBatch](ABC):
@@ -51,3 +33,24 @@ class IDataProvider[TBatch](ABC):
     @abstractmethod
     def fetch(self) -> TBatch | None:
         pass
+
+    @abstractmethod
+    def close(self) -> None:
+        pass
+
+
+@dataclass(frozen=True, slots=True)
+class StageTemplate:
+    id: str
+    data_provider: IDataProvider[MNLIBatch]
+    loss: nn.Module
+    frozen_patterns: str
+    evaluation_patterns: str
+    optimizer_factory: Callable[
+        [Iterable[tuple[str, nn.parameter.Parameter]]], Optimizer
+    ]
+    scheduler_factory: Callable[[Optimizer], LRScheduler]
+    epochs: int
+    max_gradient_norm: float
+    gradient_accumulation_steps: int
+    save_every_epochs: int

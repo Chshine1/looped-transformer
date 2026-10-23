@@ -122,6 +122,4 @@ class CheckpointLoader:
         model.load_state_dict(self._checkpoint["model"])
 
     def dispose(self) -> None:
-        if self._checkpoint is not None:
-            del self._checkpoint
-            self._checkpoint = None
+        self._checkpoint = None

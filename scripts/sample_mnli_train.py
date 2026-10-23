@@ -41,7 +41,8 @@ def count_rows(path: Path, chunk_size: int) -> int:
         keep_default_na=False,
         chunksize=chunk_size,
     )
-    return sum(len(chunk) for chunk in chunks)
+    with chunks:
+        return sum(len(chunk) for chunk in chunks)
 
 
 def proportional_quotas(counts: Counter[Stratum], size: int) -> dict[Stratum, int]:
@@ -87,9 +88,12 @@ def inspect_source(
         keep_default_na=False,
         chunksize=chunk_size,
     )
-    for chunk in chunks:
-        ordered = chunk.loc[:, list(strata)]
-        counts.update(tuple(row) for row in ordered.itertuples(index=False, name=None))
+    with chunks:
+        for chunk in chunks:
+            ordered = chunk.loc[:, list(strata)]
+            counts.update(
+                tuple(row) for row in ordered.itertuples(index=False, name=None)
+            )
     return columns, counts
 
 
@@ -114,18 +118,19 @@ def stratified_reservoir_sample(
         keep_default_na=False,
         chunksize=chunk_size,
     )
-    for chunk in chunks:
-        for row in chunk.itertuples(index=False, name=None):
-            group = tuple(row[index] for index in stratum_indices)
-            seen[group] += 1
-            quota = quotas[group]
-            reservoir = reservoirs[group]
-            if len(reservoir) < quota:
-                reservoir.append(row)
-                continue
-            replacement = rng.randrange(seen[group])
-            if replacement < quota:
-                reservoir[replacement] = row
+    with chunks:
+        for chunk in chunks:
+            for row in chunk.itertuples(index=False, name=None):
+                group = tuple(row[index] for index in stratum_indices)
+                seen[group] += 1
+                quota = quotas[group]
+                reservoir = reservoirs[group]
+                if len(reservoir) < quota:
+                    reservoir.append(row)
+                    continue
+                replacement = rng.randrange(seen[group])
+                if replacement < quota:
+                    reservoir[replacement] = row
 
     rows = [row for reservoir in reservoirs.values() for row in reservoir]
     rng.shuffle(rows)

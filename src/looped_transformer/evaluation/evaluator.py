@@ -1,6 +1,5 @@
-from torch import Tensor
-from looped_transformer.types.data import MNLIBatch
 import torch
+from torch import Tensor
 
 from looped_transformer.checkpoint_manager import CheckpointLoader
 from looped_transformer.config import ModelOptions, RuntimeOptions
@@ -9,6 +8,7 @@ from looped_transformer.evaluation.options import EvaluationOptions
 from looped_transformer.evaluation.policy import EvaluationPolicy
 from looped_transformer.modules.model import LoopedMNLI
 from looped_transformer.tokenizer import MNLITokenizer
+from looped_transformer.types.data import MNLIBatch
 from looped_transformer.types.model import ModelForwardOutput
 
 
@@ -40,16 +40,17 @@ class Evaluator:
         self._model = LoopedMNLI(
             model_options, self._tokenizer.get_tokenizer_info()
         ).to(device=runtime_options.device, dtype=runtime_options.dtype)
-        checkpoint_loader.load(evaluation_options.checkpoint_path)
-        checkpoint_loader.load_model(self._model)
-        checkpoint_loader.dispose()
+        try:
+            checkpoint_loader.load(evaluation_options.checkpoint_path)
+            checkpoint_loader.load_model(self._model)
+        finally:
+            checkpoint_loader.dispose()
 
     def evaluate(self) -> None:
         training_modes = [(module, module.training) for module in self._model.modules()]
-        self._policy.reset(self._model)
-        self._data_provider.reset_source(shuffle=False, seed=None)
-
         try:
+            self._policy.reset(self._model)
+            self._data_provider.reset_source(shuffle=False, seed=None)
             self._model.eval()
             while (batch := self._data_provider.fetch()) is not None:
                 i = _data_adapter(batch, self._runtime_options.device, self._tokenizer)
@@ -59,5 +60,11 @@ class Evaluator:
 
                 self._policy.attend_batch(batch, output)
         finally:
-            for module, training in training_modes:
-                module.train(training)
+            try:
+                self._data_provider.close()
+            finally:
+                try:
+                    self._policy.close()
+                finally:
+                    for module, training in training_modes:
+                        module.train(training)
