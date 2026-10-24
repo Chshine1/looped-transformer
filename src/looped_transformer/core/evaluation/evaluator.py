@@ -1,63 +1,55 @@
 import torch
-from torch import Tensor
 
-from looped_transformer.abstractions.data import MNLIBatch
-from looped_transformer.abstractions.model import ModelForwardOutput
+from looped_transformer.abstractions.model import TypedModule
+from looped_transformer.abstractions.training import (
+    ModelTrainingCollator,
+    IDataProvider,
+)
 from looped_transformer.checkpoint_manager import CheckpointLoader
-from looped_transformer.config import ModelOptions, RuntimeOptions
+from looped_transformer.config import RuntimeOptions
 from looped_transformer.config.evaluation import EvaluationOptions
 from looped_transformer.core.evaluation.policy import EvaluationPolicy
-from looped_transformer.data_reader import MNLIDataProvider
-from looped_transformer.modules.model import LoopedMNLI
-from looped_transformer.tokenizer import MNLITokenizer
 
 
-# todo: generalize this
-def _data_adapter(
-    batch: MNLIBatch, device: torch.device, tokenizer: MNLITokenizer
-) -> tuple[Tensor, Tensor]:
-    encoding = tokenizer.encode(batch.premises, batch.hypotheses)
-    input_ids = encoding.input_ids.to(device)
-    attention_mask = encoding.attention_mask.to(device)
-    return input_ids, attention_mask
-
-
-class Evaluator:
+class Evaluator[TBatch, *TModelInput, TModelOutput, TLossInput]:
     def __init__(
         self,
-        evaluation_options: EvaluationOptions,
+        model: TypedModule[*TModelInput, TModelOutput],
+        collator: ModelTrainingCollator[TBatch, *TModelInput, TLossInput],
+        policy: EvaluationPolicy[TBatch, *TModelInput, TModelOutput],
+        data_provider: IDataProvider[TBatch],
         checkpoint_loader: CheckpointLoader,
-        data_provider: MNLIDataProvider,
-        tokenizer: MNLITokenizer,
-        model_options: ModelOptions,
         runtime_options: RuntimeOptions,
-        policy: EvaluationPolicy,
+        evaluation_options: EvaluationOptions,
     ) -> None:
-        self._tokenizer = tokenizer
-        self._runtime_options = runtime_options
-        self._data_provider = data_provider
+        self._model = model
+        self._collator = collator
         self._policy = policy
+        self._data_provider = data_provider
 
-        self._model = LoopedMNLI(
-            model_options, self._tokenizer.get_tokenizer_info()
-        ).to(device=runtime_options.device, dtype=runtime_options.dtype)
+        self._runtime_options = runtime_options
+
         try:
             checkpoint_loader.load(evaluation_options.checkpoint_path)
-            checkpoint_loader.load_model(self._model)
+            checkpoint_loader.load_model(self._model.torch)
         finally:
             checkpoint_loader.dispose()
 
     def evaluate(self) -> None:
-        training_modes = [(module, module.training) for module in self._model.modules()]
+        training_modes = [
+            (module, module.training) for module in self._model.torch.modules()
+        ]
         try:
             self._policy.reset(self._model)
             self._data_provider.reset_source(shuffle=False, seed=None)
-            self._model.eval()
+            self._model.torch.eval()
             while (batch := self._data_provider.fetch()) is not None:
-                i = _data_adapter(batch, self._runtime_options.device, self._tokenizer)
+                i, o = self._collator.collate_batch(
+                    batch, self._runtime_options.device, self._runtime_options.dtype
+                )
 
                 with torch.no_grad(), self._runtime_options.autocast:
-                    output: ModelForwardOutput = self._model(*i)
+                    output = self._model(*i)
 
                 self._policy.attend_batch(batch, output)
         finally:

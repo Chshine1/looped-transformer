@@ -1,18 +1,16 @@
 from abc import ABC
 from abc import abstractmethod
 
-from looped_transformer.abstractions.data import MNLIBatch
-from looped_transformer.abstractions.model import ModelForwardOutput
-from looped_transformer.modules.model import LoopedMNLI
+from looped_transformer.abstractions.model import TypedModule
 
 
-class EvaluationPolicy(ABC):
+class EvaluationPolicy[TBatch, *TModelInput, TModelOutput](ABC):
     @abstractmethod
-    def reset(self, model: LoopedMNLI) -> None:
+    def reset(self, model: TypedModule[*TModelInput, TModelOutput]) -> None:
         pass
 
     @abstractmethod
-    def attend_batch(self, batch: MNLIBatch, output: ModelForwardOutput) -> None:
+    def attend_batch(self, batch: TBatch, output: TModelOutput) -> None:
         pass
 
     @abstractmethod

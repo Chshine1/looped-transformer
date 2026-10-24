@@ -9,9 +9,9 @@ from torch.nn import functional
 from looped_transformer.abstractions.data import MNLIBatch
 from looped_transformer.abstractions.mnli import get_logic_relation
 from looped_transformer.abstractions.model import ModelForwardOutput
+from looped_transformer.abstractions.model import TypedModule
 from looped_transformer.core.evaluation import EvaluationPolicy
-from looped_transformer.core.evaluation import StructuredEvaluationLogger
-from looped_transformer.modules.model import LoopedMNLI
+from looped_transformer.core.logging import StructuralLogger
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,7 +55,9 @@ class _MetricTotals:
         }
 
 
-class LoopDiagnosticsPolicy(EvaluationPolicy):
+class LoopDiagnosticsPolicy(
+    EvaluationPolicy[MNLIBatch, Tensor, Tensor, ModelForwardOutput]
+):
     _target_histogram: Tensor | None
     _final_prediction_histogram: Tensor | None
     _per_loop_prediction_histogram: Tensor | None
@@ -65,9 +67,9 @@ class LoopDiagnosticsPolicy(EvaluationPolicy):
         max_iterations: int,
         device: torch.device,
         label_smoothing: float,
-        shuffle_oracle_repeats: int = 20,
-        shuffle_seed: int = 0,
-        logger: StructuredEvaluationLogger | None = None,
+        shuffle_oracle_repeats: int,
+        shuffle_seed: int,
+        logger: StructuralLogger,
     ) -> None:
         if max_iterations <= 0:
             raise ValueError("max_iterations must be positive")
@@ -130,10 +132,9 @@ class LoopDiagnosticsPolicy(EvaluationPolicy):
         self._per_loop_prediction_histogram: Tensor | None = None
 
     @override
-    def reset(self, model: LoopedMNLI) -> None:
+    def reset(self, model: TypedModule[Tensor, Tensor, ModelForwardOutput]) -> None:
         self._initialize_state()
-        if self._logger is not None:
-            self._logger.start()
+        self._logger.start()
 
     @override
     def close(self) -> None:
@@ -145,7 +146,6 @@ class LoopDiagnosticsPolicy(EvaluationPolicy):
         labels: Tensor,
         label_smoothing: float = 0.0,
     ) -> Tensor:
-        """Return per-sample cross-entropy with shape (loops, samples)."""
         loop_count, sample_count, class_count = timed_logits.shape
         flat_labels = labels.unsqueeze(0).expand(loop_count, -1).reshape(-1)
         return functional.cross_entropy(
@@ -416,8 +416,7 @@ class LoopDiagnosticsPolicy(EvaluationPolicy):
                 "prediction_by_loop": per_loop_histogram.cpu().tolist(),
             },
         )
-        if self._logger is not None:
-            self._logger.log_batch(batch_diagnostics)
+        self._logger.log_batch_evaluation(batch_diagnostics)
 
     def collect_diagnostics(self) -> dict[str, Any]:
         self._require_samples()

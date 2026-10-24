@@ -1,7 +1,6 @@
-from lagom import Alias, Container, Singleton
+from lagom import Container, Singleton
 from lagom.interfaces import ReadableContainer
 
-from looped_transformer.abstractions.training import IDataProvider
 from looped_transformer.checkpoint_manager import CheckpointLoader, CheckpointSaver
 from looped_transformer.config import (
     AppOptions,
@@ -11,12 +10,9 @@ from looped_transformer.config import (
     RuntimeOptions,
 )
 from looped_transformer.config.evaluation import EvaluationOptions
-from looped_transformer.core.evaluation import EvaluationPolicy
-from looped_transformer.core.evaluation import Evaluator
-from looped_transformer.core.evaluation import StructuredEvaluationLogger
+from looped_transformer.core.evaluation.evaluator_factory import EvaluatorFactory
+from looped_transformer.core.logging import StructuralLogger
 from looped_transformer.core.training.model_trainer_factory import ModelTrainerFactory
-from looped_transformer.data_reader import MNLIDataProvider
-from looped_transformer.policies import LoopDiagnosticsPolicy
 from looped_transformer.tokenizer import MNLITokenizer
 
 
@@ -37,15 +33,8 @@ def configure_evaluation(container: Container, options: EvaluationOptions) -> Co
     evaluation_container = container.clone()
     evaluation_container[EvaluationOptions] = options
     evaluation_container[DataOptions] = options.data
-    evaluation_container[IDataProvider] = MNLIDataProvider
-    evaluation_container[StructuredEvaluationLogger] = Singleton(
-        _build_evaluation_logger
-    )
-    evaluation_container[LoopDiagnosticsPolicy] = Singleton(
-        _build_loop_diagnostics_policy
-    )
-    evaluation_container[EvaluationPolicy] = Alias(LoopDiagnosticsPolicy)
-    evaluation_container[Evaluator] = Evaluator
+    evaluation_container[StructuralLogger] = Singleton(_build_logger)
+    evaluation_container[EvaluatorFactory] = Singleton(EvaluatorFactory)
     return evaluation_container
 
 
@@ -53,22 +42,7 @@ def _build_tokenizer(container: ReadableContainer) -> MNLITokenizer:
     return MNLITokenizer(container[ModelOptions].max_sequence_length)
 
 
-def _build_evaluation_logger(
+def _build_logger(
     container: ReadableContainer,
-) -> StructuredEvaluationLogger:
-    return StructuredEvaluationLogger(container[EvaluationOptions].output_dir)
-
-
-def _build_loop_diagnostics_policy(
-    container: ReadableContainer,
-) -> LoopDiagnosticsPolicy:
-    model = container[ModelOptions]
-    runtime = container[RuntimeOptions]
-    options = container[EvaluationOptions]
-    return LoopDiagnosticsPolicy(
-        max_iterations=model.max_iterations,
-        device=runtime.device,
-        label_smoothing=options.label_smoothing,
-        shuffle_oracle_repeats=options.shuffle_oracle_repeats,
-        logger=container[StructuredEvaluationLogger],
-    )
+) -> StructuralLogger:
+    return StructuralLogger(container[EvaluationOptions].output_dir)

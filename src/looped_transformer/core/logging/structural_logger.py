@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 
-class StructuredEvaluationLogger:
+class StructuralLogger:
     def __init__(self, output_dir: str | Path) -> None:
         self.output_dir = Path(output_dir)
         self.batch_log_path = self.output_dir / "batches.jsonl"
@@ -14,7 +14,7 @@ class StructuredEvaluationLogger:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.batch_log_path.write_text("", encoding="utf-8")
 
-    def log_batch(self, diagnostics: Any) -> None:
+    def log_batch_evaluation(self, diagnostics: Any) -> None:
         record = {
             "event": "evaluation_batch",
             "diagnostics": self._to_json_value(diagnostics),

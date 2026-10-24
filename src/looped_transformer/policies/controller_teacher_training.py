@@ -1,4 +1,4 @@
-from typing import Any
+from typing import cast
 from typing import override
 
 import torch
@@ -9,13 +9,16 @@ from torch.utils.hooks import RemovableHandle
 from looped_transformer.abstractions.data import MNLIBatch
 from looped_transformer.abstractions.mnli import get_logic_relation
 from looped_transformer.abstractions.model import ModelForwardOutput
+from looped_transformer.abstractions.model import TypedModule
 from looped_transformer.config import ModelOptions, RuntimeOptions
 from looped_transformer.core.evaluation import EvaluationPolicy
 from looped_transformer.modules.controller_teacher import ControllerTeacher
 from looped_transformer.modules.model import LoopedMNLI
 
 
-class ControllerTeacherTrainingPolicy(EvaluationPolicy):
+class ControllerTeacherTrainingPolicy(
+    EvaluationPolicy[MNLIBatch, Tensor, Tensor, ModelForwardOutput]
+):
     class _Loss(nn.Module):
         # noinspection method-may-be-static
         def forward(
@@ -77,7 +80,7 @@ class ControllerTeacherTrainingPolicy(EvaluationPolicy):
         self._global_step = 0
 
     @override
-    def reset(self, model: LoopedMNLI) -> None:
+    def reset(self, model: TypedModule) -> None:
         self.close()
         self._model.train()
         self._epoch_loss = None
@@ -97,10 +100,12 @@ class ControllerTeacherTrainingPolicy(EvaluationPolicy):
 
         handles: list[RemovableHandle] = []
         try:
-            handles.append(model.register_forward_pre_hook(capture_inputs))
+            handles.append(model.torch.register_forward_pre_hook(capture_inputs))
             # noinspection protected-member
             handles.append(
-                model._alignment_rotation.register_forward_hook(capture_aligned_state)
+                cast(LoopedMNLI, model.torch)._alignment_rotation.register_forward_hook(
+                    capture_aligned_state
+                )
             )
         except BaseException:
             for handle in handles:
@@ -147,29 +152,6 @@ class ControllerTeacherTrainingPolicy(EvaluationPolicy):
         )
         self._epoch_batches += 1
         self._global_step += 1
-
-    def finish_epoch(self) -> float:
-        if self._epoch_loss is None:
-            raise RuntimeError("Cannot finish an epoch that contained no batches")
-        mean_loss = (self._epoch_loss / self._epoch_batches).item()
-        self._scheduler.step()
-        return mean_loss
-
-    def checkpoint_state(self) -> dict[str, Any]:
-        return {
-            "model": self._model.state_dict(),
-            "optimizer": self._optimizer.state_dict(),
-            "scheduler": self._scheduler.state_dict(),
-            "scaler": self._scaler.state_dict(),
-            "global_step": self._global_step,
-        }
-
-    def load_checkpoint_state(self, state: dict[str, Any]) -> None:
-        self._model.load_state_dict(state["model"])
-        self._optimizer.load_state_dict(state["optimizer"])
-        self._scheduler.load_state_dict(state["scheduler"])
-        self._scaler.load_state_dict(state["scaler"])
-        self._global_step = int(state["global_step"])
 
     @override
     def close(self) -> None:

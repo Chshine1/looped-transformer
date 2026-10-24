@@ -15,8 +15,10 @@ from looped_transformer.config import DataOptions, load_options
 from looped_transformer.config.evaluation import EvaluationOptions
 from looped_transformer.config.model import ModelOptions
 from looped_transformer.config.runtime import RuntimeOptions
-from looped_transformer.core.evaluation import Evaluator
+from looped_transformer.core.evaluation.evaluator_factory import EvaluatorFactory
+from looped_transformer.core.logging import StructuralLogger
 from looped_transformer.core.training.model_trainer_factory import ModelTrainerFactory
+from looped_transformer.data_reader import MNLIDataProvider
 from looped_transformer.dependency_injection import (
     build_container,
     configure_evaluation,
@@ -58,6 +60,22 @@ def _model_factory(
         device=runtime_options.device, dtype=runtime_options.dtype
     )
     return TypedModule(model)
+
+
+def _loop_diagnostics_policy_factory(
+    model: ModelOptions,
+    runtime: RuntimeOptions,
+    options: EvaluationOptions,
+    logger: StructuralLogger,
+) -> LoopDiagnosticsPolicy:
+    return LoopDiagnosticsPolicy(
+        max_iterations=model.max_iterations,
+        device=runtime.device,
+        label_smoothing=options.label_smoothing,
+        shuffle_oracle_repeats=options.shuffle_oracle_repeats,
+        shuffle_seed=0,
+        logger=logger,
+    )
 
 
 def main() -> None:
@@ -130,8 +148,19 @@ def main() -> None:
             output_dir=evaluation_output_dir,
         )
         evaluation_container = configure_evaluation(container, evaluation_options)
-        evaluation_container[Evaluator].evaluate()
-        policy = evaluation_container[LoopDiagnosticsPolicy]
+        evaluator_factory = evaluation_container[EvaluatorFactory]
+
+        make_model = container.partial(_model_factory)
+        make_collator = container.partial(MNLICollator)
+        make_policy = container.partial(_loop_diagnostics_policy_factory)
+        make_data_provider = container.partial(MNLIDataProvider)
+
+        policy = make_policy()
+        evaluator = evaluator_factory.create(
+            make_model(), make_collator(), policy, make_data_provider()
+        )
+        evaluator.evaluate()
+
         summary = policy.collect_diagnostics()
         summary["checkpoint"] = str(Path(args.checkpoint).resolve())
         summary["data_file"] = str(args.data_file.resolve())
