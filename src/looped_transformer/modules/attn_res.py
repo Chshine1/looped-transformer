@@ -4,9 +4,24 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional
 
-from looped_transformer.modules.batch_dropout import BatchDropout
+from looped_transformer.config.base import (
+    ExclusiveProbability,
+    OptionsModel,
+    PositiveInt,
+)
+from looped_transformer.modules.batch_dropout import BatchDropout, BatchDropoutOptions
 from looped_transformer.modules.residual_scale import ResidualScale
-from looped_transformer.utils.shared_cache import PositionalRoPECache, apply_rotary
+from looped_transformer.utils.positional_rope_cache import PositionalRoPECache
+from looped_transformer.utils.rotary import apply_rotary
+
+
+class AttentionResidualOptions(OptionsModel):
+    model_dimension: PositiveInt
+    heads_count: PositiveInt
+    max_iterations: PositiveInt
+    attention_dropout: ExclusiveProbability
+    residual_dropout: ExclusiveProbability
+    stochastic_depth: ExclusiveProbability
 
 
 class AttnRes(nn.Module):
@@ -15,16 +30,13 @@ class AttnRes(nn.Module):
     def __init__(
         self,
         positional_rope_cache: PositionalRoPECache,
-        d_model: int,
-        n_heads: int,
-        max_iterations: int,
-        attention_dropout: float,
-        residual_dropout: float,
-        stochastic_depth: float,
+        options: AttentionResidualOptions,
     ):
         super().__init__()
         object.__setattr__(self, "_rope_cache", positional_rope_cache)
 
+        d_model = options.model_dimension
+        n_heads = options.heads_count
         assert d_model % n_heads == 0, "d_model must be divisible by n_heads"
         self._d_model = d_model
         self._n_heads = n_heads
@@ -38,12 +50,14 @@ class AttnRes(nn.Module):
         self._k_proj = nn.Linear(d_model, d_model)
         self._v_proj = nn.Linear(d_model, d_model)
 
-        self._history_bias = nn.Parameter(torch.zeros(max_iterations))
+        self._history_bias = nn.Parameter(torch.zeros(options.max_iterations))
 
         self._out_proj = nn.Linear(d_model, d_model)
-        self._attention_dropout = nn.Dropout(attention_dropout)
-        self._residual_dropout = nn.Dropout(residual_dropout)
-        self._batch_dropout = BatchDropout(stochastic_depth)
+        self._attention_dropout = nn.Dropout(options.attention_dropout)
+        self._residual_dropout = nn.Dropout(options.residual_dropout)
+        self._batch_dropout = BatchDropout(
+            BatchDropoutOptions(probability=options.stochastic_depth)
+        )
         self._residual_scale = ResidualScale()
 
     def time_rope_regularization(self) -> Tensor:

@@ -1,6 +1,5 @@
 from dataclasses import dataclass
-from typing import Any
-from typing import override
+from typing import Any, override
 
 import torch
 from torch import Tensor
@@ -8,10 +7,23 @@ from torch.nn import functional
 
 from looped_transformer.abstractions.data import MNLIBatch
 from looped_transformer.abstractions.mnli import get_logic_relation
-from looped_transformer.abstractions.model import ModelForwardOutput
-from looped_transformer.abstractions.model import TypedModule
+from looped_transformer.abstractions.model import ModelForwardOutput, TypedModule
+from looped_transformer.config.base import (
+    ExclusiveProbability,
+    NonNegativeInt,
+    OptionsModel,
+    PositiveInt,
+)
+from looped_transformer.config.runtime import DeviceOptions
 from looped_transformer.core.evaluation import EvaluationPolicy
 from looped_transformer.core.logging import StructuralLogger
+from looped_transformer.modules.config import LoopOptions
+
+
+class LoopDiagnosticsOptions(OptionsModel):
+    label_smoothing: ExclusiveProbability = 0.05
+    shuffle_oracle_repeats: PositiveInt = 20
+    shuffle_seed: NonNegativeInt = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,25 +76,16 @@ class LoopDiagnosticsPolicy(
 
     def __init__(
         self,
-        max_iterations: int,
-        device: torch.device,
-        label_smoothing: float,
-        shuffle_oracle_repeats: int,
-        shuffle_seed: int,
+        loop_options: LoopOptions,
+        device_options: DeviceOptions,
+        options: LoopDiagnosticsOptions,
         logger: StructuralLogger,
     ) -> None:
-        if max_iterations <= 0:
-            raise ValueError("max_iterations must be positive")
-        if not 0 <= label_smoothing < 1:
-            raise ValueError("label_smoothing must be in [0, 1)")
-        if shuffle_oracle_repeats <= 0:
-            raise ValueError("shuffle_oracle_repeats must be positive")
-
-        self._max_iterations = max_iterations
-        self._device = device
-        self._label_smoothing = label_smoothing
-        self._shuffle_oracle_repeats = shuffle_oracle_repeats
-        self._shuffle_seed = shuffle_seed
+        self._max_iterations = loop_options.max_iterations
+        self._device = device_options.device
+        self._label_smoothing = options.label_smoothing
+        self._shuffle_oracle_repeats = options.shuffle_oracle_repeats
+        self._shuffle_seed = options.shuffle_seed
         self._logger = logger
         self._initialize_state()
 

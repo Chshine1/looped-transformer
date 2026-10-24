@@ -11,8 +11,24 @@ from pandas import DataFrame
 
 from looped_transformer.abstractions.data import MNLIBatch
 from looped_transformer.abstractions.training import IDataProvider
-from looped_transformer.artifacts import get_artifact_id, get_file_fingerprint
-from looped_transformer.config import DataOptions
+from looped_transformer.config.base import (
+    ConfigPath,
+    NonEmptyString,
+    NonNegativeInt,
+    OptionsModel,
+    PositiveInt,
+)
+
+
+class DataOptions(OptionsModel):
+    seed: NonNegativeInt
+    file_path: ConfigPath
+    batch_size: PositiveInt
+    premise_column: NonEmptyString
+    hypothesis_column: NonEmptyString
+    label_column: NonEmptyString
+    shuffle_cache_dir: ConfigPath
+    shuffle_chunk_size: PositiveInt
 
 
 class MNLIDataProvider(IDataProvider[MNLIBatch]):
@@ -167,6 +183,8 @@ class MNLIDataProvider(IDataProvider[MNLIBatch]):
         return count
 
     def _shuffle_spec(self) -> dict:
+        from looped_transformer.artifacts import get_file_fingerprint
+
         return {
             "format": self.CACHE_FORMAT,
             "source": get_file_fingerprint(self._path),
@@ -179,6 +197,8 @@ class MNLIDataProvider(IDataProvider[MNLIBatch]):
         }
 
     def _prepare_shuffle_chunks(self) -> list[Path]:
+        from looped_transformer.artifacts import get_artifact_id
+
         spec = self._shuffle_spec()
         identifier = get_artifact_id(spec)
         cache_dir = Path(self._data_options.shuffle_cache_dir) / identifier

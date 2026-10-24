@@ -8,22 +8,27 @@ from torch import Tensor
 
 from looped_transformer.abstractions.data import MNLIBatch
 from looped_transformer.abstractions.mnli import get_logic_relation
-from looped_transformer.abstractions.model import ModelForwardOutput
-from looped_transformer.abstractions.model import TypedModule
+from looped_transformer.abstractions.model import ModelForwardOutput, TypedModule
 from looped_transformer.abstractions.training import ModelTrainingCollator
-from looped_transformer.config import DataOptions, load_options
-from looped_transformer.config.evaluation import EvaluationOptions
-from looped_transformer.config.model import ModelOptions
-from looped_transformer.config.runtime import RuntimeOptions
+from looped_transformer.config import load_options
+from looped_transformer.config.evaluation import (
+    EvaluationCheckpointOptions,
+    EvaluationOptions,
+    EvaluationOutputOptions,
+    LoopDiagnosticsOptions,
+)
+from looped_transformer.config.runtime import DeviceOptions, PrecisionOptions
+from looped_transformer.config.sequence import SequenceOptions
 from looped_transformer.core.evaluation.evaluator_factory import EvaluatorFactory
 from looped_transformer.core.logging import StructuralLogger
 from looped_transformer.core.training.model_trainer_factory import ModelTrainerFactory
-from looped_transformer.data_reader import MNLIDataProvider
+from looped_transformer.data_reader import DataOptions, MNLIDataProvider
 from looped_transformer.dependency_injection import (
     build_container,
     configure_evaluation,
 )
-from looped_transformer.modules.model import LoopedMNLI
+from looped_transformer.modules.config import LoopOptions
+from looped_transformer.modules.model import LoopedMNLI, ModelOptions
 from looped_transformer.policies import LoopDiagnosticsPolicy
 from looped_transformer.stages import build_stage_templates
 from looped_transformer.tokenizer import MNLITokenizer
@@ -53,29 +58,24 @@ class MNLICollator(ModelTrainingCollator[MNLIBatch, Tensor, Tensor, Tensor]):
 
 def _model_factory(
     model_options: ModelOptions,
+    sequence_options: SequenceOptions,
     tokenizer: MNLITokenizer,
-    runtime_options: RuntimeOptions,
+    device_options: DeviceOptions,
+    precision_options: PrecisionOptions,
 ) -> TypedModule[Tensor, Tensor, ModelForwardOutput]:
-    model = LoopedMNLI(model_options, tokenizer.get_tokenizer_info()).to(
-        device=runtime_options.device, dtype=runtime_options.dtype
-    )
+    model = LoopedMNLI(
+        model_options, sequence_options, tokenizer.get_tokenizer_info()
+    ).to(device=device_options.device, dtype=precision_options.dtype)
     return TypedModule(model)
 
 
 def _loop_diagnostics_policy_factory(
-    model: ModelOptions,
-    runtime: RuntimeOptions,
-    options: EvaluationOptions,
+    loop: LoopOptions,
+    device: DeviceOptions,
+    options: LoopDiagnosticsOptions,
     logger: StructuralLogger,
 ) -> LoopDiagnosticsPolicy:
-    return LoopDiagnosticsPolicy(
-        max_iterations=model.max_iterations,
-        device=runtime.device,
-        label_smoothing=options.label_smoothing,
-        shuffle_oracle_repeats=options.shuffle_oracle_repeats,
-        shuffle_seed=0,
-        logger=logger,
-    )
+    return LoopDiagnosticsPolicy(loop, device, options, logger)
 
 
 def main() -> None:
@@ -120,7 +120,7 @@ def main() -> None:
     container = build_container(options)
 
     if args.command == "train":
-        stages = build_stage_templates(options.model.training)
+        stages = build_stage_templates(options.training)
         trainer_factory = container[ModelTrainerFactory]
 
         make_model = container.partial(_model_factory)
@@ -143,17 +143,18 @@ def main() -> None:
             Path(args.checkpoint).resolve().parent / "evaluation"
         )
         evaluation_options = EvaluationOptions(
-            checkpoint_path=Path(args.checkpoint),
+            checkpoint=EvaluationCheckpointOptions(path=Path(args.checkpoint)),
             data=data_options,
-            output_dir=evaluation_output_dir,
+            output=EvaluationOutputOptions(directory=evaluation_output_dir),
+            diagnostics=LoopDiagnosticsOptions(),
         )
         evaluation_container = configure_evaluation(container, evaluation_options)
         evaluator_factory = evaluation_container[EvaluatorFactory]
 
-        make_model = container.partial(_model_factory)
-        make_collator = container.partial(MNLICollator)
-        make_policy = container.partial(_loop_diagnostics_policy_factory)
-        make_data_provider = container.partial(MNLIDataProvider)
+        make_model = evaluation_container.partial(_model_factory)
+        make_collator = evaluation_container.partial(MNLICollator)
+        make_policy = evaluation_container.partial(_loop_diagnostics_policy_factory)
+        make_data_provider = evaluation_container.partial(MNLIDataProvider)
 
         policy = make_policy()
         evaluator = evaluator_factory.create(

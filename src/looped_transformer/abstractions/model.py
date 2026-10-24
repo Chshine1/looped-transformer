@@ -1,9 +1,8 @@
-from typing import Literal
-from typing import NotRequired
-from typing import Protocol
-from typing import TypedDict
+from typing import Literal, NotRequired, Protocol, Self, TypedDict
 
 from torch import Tensor, nn
+from torch import device as TorchDevice
+from torch import dtype as TorchDType
 
 
 class IModule[*TIn, TOut](Protocol):
@@ -27,10 +26,10 @@ class TypedModule[*TIn, TOut]:
 
     def to(
         self,
-        device: torch.device | int | str | None = None,
-        dtype: torch.dtype | None = None,
+        device: TorchDevice | int | str | None = None,
+        dtype: TorchDType | None = None,
         non_blocking: bool = False,
-    ) -> TypedModule[*TIn, TOut]:
+    ) -> Self:
         self._torch.to(device=device, dtype=dtype, non_blocking=non_blocking)
         return self
 

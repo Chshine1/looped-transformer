@@ -2,6 +2,7 @@ import os
 from collections.abc import Sequence
 from typing import cast
 
+from pydantic import Field
 from transformers import TensorType
 
 # noinspection protected-member
@@ -9,20 +10,32 @@ from transformers.models.bert.tokenization_bert import BertTokenizerFast
 from transformers.utils import PaddingStrategy
 
 from looped_transformer.abstractions.tokenizer import TokenizeResult, TokenizerInfo
+from looped_transformer.config.base import NonEmptyString, OptionsModel
+from looped_transformer.config.sequence import SequenceOptions
+
+
+class TokenizerSourceOptions(OptionsModel):
+    pretrained_model: NonEmptyString = "bert-base-uncased"
+
+
+class TokenizerOptions(OptionsModel):
+    source: TokenizerSourceOptions = Field(default_factory=TokenizerSourceOptions)
+    sequence: SequenceOptions
 
 
 class MNLITokenizer:
-    def __init__(self, max_sequence_length: int) -> None:
-        self._max_sequence_length = max_sequence_length
+    def __init__(self, options: TokenizerOptions) -> None:
+        self._max_sequence_length = options.sequence.max_sequence_length
         offline = os.environ.get("HF_HUB_OFFLINE", "").lower() in {
             "1",
             "true",
             "yes",
         }
         source = "local cache only" if offline else "local cache or Hugging Face Hub"
-        print(f"Loading bert-base-uncased tokenizer ({source})...", flush=True)
+        model_name = options.source.pretrained_model
+        print(f"Loading {model_name} tokenizer ({source})...", flush=True)
         self._tokenizer = BertTokenizerFast.from_pretrained(
-            "bert-base-uncased",
+            model_name,
             local_files_only=offline,
         )
         print("Tokenizer loaded.", flush=True)

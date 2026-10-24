@@ -1,5 +1,4 @@
-from typing import cast
-from typing import override
+from typing import cast, override
 
 import torch
 from torch import Tensor, nn
@@ -8,12 +7,29 @@ from torch.utils.hooks import RemovableHandle
 
 from looped_transformer.abstractions.data import MNLIBatch
 from looped_transformer.abstractions.mnli import get_logic_relation
-from looped_transformer.abstractions.model import ModelForwardOutput
-from looped_transformer.abstractions.model import TypedModule
-from looped_transformer.config import ModelOptions, RuntimeOptions
+from looped_transformer.abstractions.model import ModelForwardOutput, TypedModule
+from looped_transformer.config.base import (
+    NonNegativeFloat,
+    OptionsModel,
+    PositiveFloat,
+    PositiveInt,
+)
+from looped_transformer.config.runtime import DeviceOptions, PrecisionOptions
+from looped_transformer.config.sequence import SequenceOptions
 from looped_transformer.core.evaluation import EvaluationPolicy
-from looped_transformer.modules.controller_teacher import ControllerTeacher
+from looped_transformer.modules.config import LoopOptions
+from looped_transformer.modules.controller_teacher import (
+    ControllerTeacher,
+    ControllerTeacherOptions,
+)
 from looped_transformer.modules.model import LoopedMNLI
+
+
+class ControllerTeacherTrainingOptions(OptionsModel):
+    epochs: PositiveInt
+    learning_rate: PositiveFloat
+    weight_decay: NonNegativeFloat
+    max_gradient_norm: PositiveFloat
 
 
 class ControllerTeacherTrainingPolicy(
@@ -43,36 +59,39 @@ class ControllerTeacherTrainingPolicy(
 
     def __init__(
         self,
-        model_options: ModelOptions,
-        runtime_options: RuntimeOptions,
-        epochs: int,
-        learning_rate: float,
-        weight_decay: float,
-        max_gradient_norm: float,
+        model_options: ControllerTeacherOptions,
+        loop_options: LoopOptions,
+        sequence_options: SequenceOptions,
+        device_options: DeviceOptions,
+        precision_options: PrecisionOptions,
+        options: ControllerTeacherTrainingOptions,
     ) -> None:
-        self._runtime_options = runtime_options
-        self._max_gradient_norm = max_gradient_norm
+        self._device_options = device_options
+        self._precision_options = precision_options
+        self._max_gradient_norm = options.max_gradient_norm
 
-        self._model = ControllerTeacher(model_options).to(runtime_options.device)
+        self._model = ControllerTeacher(model_options, sequence_options).to(
+            device_options.device
+        )
         self._loss = self._Loss()
         self._optimizer = torch.optim.AdamW(
             self._model.parameters(),
-            lr=learning_rate,
-            weight_decay=weight_decay,
+            lr=options.learning_rate,
+            weight_decay=options.weight_decay,
         )
         self._scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             self._optimizer,
-            T_max=epochs,
+            T_max=options.epochs,
         )
         self._scaler = torch.amp.GradScaler(
-            runtime_options.device.type,
-            enabled=runtime_options.amp_enabled
-            and runtime_options.amp_dtype == torch.float16,
+            device_options.device.type,
+            enabled=precision_options.amp_enabled
+            and precision_options.amp_dtype == torch.float16,
         )
 
         self._batch_aligned_states: list[Tensor | None] = [
             None
-        ] * model_options.max_iterations
+        ] * loop_options.max_iterations
         self._padding_mask: Tensor | None = None
         self._hook_handles: list[RemovableHandle] = []
         self._epoch_loss: Tensor | None = None
@@ -128,11 +147,11 @@ class ControllerTeacherTrainingPolicy(
         labels = torch.tensor(
             [get_logic_relation(label).value for label in batch.labels],
             dtype=torch.long,
-            device=self._runtime_options.device,
+            device=self._device_options.device,
         )
 
         self._optimizer.zero_grad(set_to_none=True)
-        with self._runtime_options.autocast:
+        with self._precision_options.autocast(self._device_options.device):
             loop_logits = self._model(aligned_hidden_states, padding_mask)
             loss = self._loss(loop_logits, output, labels)
 

@@ -3,13 +3,13 @@ from typing import Any, ClassVar
 
 from pydantic import Field, SerializeAsAny, field_validator, model_validator
 
-from looped_transformer.config import DataOptions
 from looped_transformer.config.base import (
     NonEmptyString,
     OptionsModel,
     PositiveFloat,
     PositiveInt,
 )
+from looped_transformer.data_reader import DataOptions
 
 
 class CommonStageOptions(OptionsModel):

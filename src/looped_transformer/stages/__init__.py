@@ -1,7 +1,6 @@
 from looped_transformer.abstractions.training import StageTemplate
-
-from looped_transformer.config.training import TrainingOptions
 from looped_transformer.stages import looped_mnli
+from looped_transformer.stages.config import TrainingOptions
 from looped_transformer.stages.registry import build_stage_template
 
 

@@ -8,10 +8,10 @@ model:
     classifier: 0.00
     controller: 0.00
     stochastic_depth: 0.00
-  training:
-    stage_templates:
-      backbone_warmup:
-        common:
-          epochs: 12
-        loss:
-          label_smoothing: 0.00
+training:
+  stage_templates:
+    backbone_warmup:
+      common:
+        epochs: 12
+      loss:
+        label_smoothing: 0.00

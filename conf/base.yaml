@@ -1,21 +1,32 @@
-data:
+checkpoint:
   output_dir: outputs
 
 runtime:
-  device: cuda:0
-  dtype: float32
-  amp_enabled: false
-  amp_dtype: float16
-  seed: 42
-  allow_tf32: true
-  deterministic: false
-  log_every_steps: 50
+  device:
+    device: cuda:0
+  precision:
+    dtype: float32
+    amp_enabled: false
+    amp_dtype: float16
+  reproducibility:
+    seed: 42
+    allow_tf32: true
+    deterministic: false
+  training:
+    log_every_steps: 50
+
+tokenizer:
+  source:
+    pretrained_model: bert-base-uncased
+  sequence:
+    max_sequence_length: 128
 
 model:
   hidden_state_dimension: 256
   output_classes_count: 3
-  max_iterations: 6
-  max_sequence_length: 128
+  loop:
+    max_iterations: 6
+    time_rope_base_frequency: 4.8
   dropout:
     token: 0.00
     embedding: 0.10
@@ -33,11 +44,11 @@ model:
     hazard_baseline_offset: -2.0
     hazard_baseline_scale: -2.0
     hazard_adjustment_scale: 0.9
-  training:
-    stages:
-      - backbone_warmup
-    stage_templates:
-      backbone_warmup:
+training:
+  stages:
+    - backbone_warmup
+  stage_templates:
+    backbone_warmup:
         type: looped_mnli
         common:
           epochs: 6

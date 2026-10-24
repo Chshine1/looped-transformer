@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from looped_transformer.abstractions.training import StageTemplate
-from looped_transformer.config.training import StageOptions
+from looped_transformer.stages.config import StageOptions
 
 StageBuilder = Callable[[str, StageOptions], StageTemplate]
 

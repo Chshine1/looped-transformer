@@ -1,13 +1,14 @@
-from dataclasses import dataclass
-from pathlib import Path
+from pydantic import Field
 
-from looped_transformer.config import DataOptions
+from looped_transformer.config.base import OptionsModel
+from looped_transformer.core.evaluation.evaluator import EvaluationCheckpointOptions
+from looped_transformer.core.logging.structural_logger import EvaluationOutputOptions
+from looped_transformer.data_reader import DataOptions
+from looped_transformer.policies.loop_diagnostics import LoopDiagnosticsOptions
 
 
-@dataclass(frozen=True, slots=True)
-class EvaluationOptions:
-    checkpoint_path: Path
+class EvaluationOptions(OptionsModel):
+    checkpoint: EvaluationCheckpointOptions
     data: DataOptions
-    output_dir: Path
-    label_smoothing: float = 0.05
-    shuffle_oracle_repeats: int = 20
+    output: EvaluationOutputOptions
+    diagnostics: LoopDiagnosticsOptions = Field(default_factory=LoopDiagnosticsOptions)

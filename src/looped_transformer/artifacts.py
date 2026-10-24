@@ -9,10 +9,21 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+import torch
 from pydantic import BaseModel
 
-from looped_transformer.config import ModelOptions, RuntimeOptions
-from looped_transformer.config.data import CommonDataOptions
+from looped_transformer.config.base import OptionsModel
+from looped_transformer.config.runtime import RuntimeOptions
+from looped_transformer.modules.model import ModelOptions
+from looped_transformer.stages.config import TrainingOptions
+from looped_transformer.tokenizer import TokenizerOptions
+
+
+class RunArtifactOptions(OptionsModel):
+    runtime: RuntimeOptions
+    model: ModelOptions
+    tokenizer: TokenizerOptions
+    training: TrainingOptions
 
 
 def _canonicalize(value: Any) -> Any:
@@ -30,6 +41,8 @@ def _canonicalize(value: Any) -> Any:
         return str(value)
     if isinstance(value, Enum):
         return value.value
+    if isinstance(value, torch.device | torch.dtype):
+        return str(value)
     return value
 
 
@@ -65,20 +78,22 @@ def get_file_fingerprint(path: str | Path) -> dict[str, Any]:
     }
 
 
-def _get_run_artifact_spec(runtime: Any, model: Any) -> dict:
+def _get_run_artifact_spec(options: RunArtifactOptions) -> dict:
     return {
         "format": "looped-transformer-training-v1",
-        "runtime": runtime,
-        "model": model,
+        "runtime": options.runtime,
+        "model": options.model,
+        "tokenizer": options.tokenizer,
+        "training": options.training,
     }
 
 
 def get_run_output_dir(
-    runtime: RuntimeOptions, data: CommonDataOptions, model: ModelOptions
+    output_dir: Path, artifact_options: RunArtifactOptions
 ) -> tuple[Path, str, dict]:
-    spec = _get_run_artifact_spec(runtime, model)
+    spec = _get_run_artifact_spec(artifact_options)
     identifier = get_artifact_id(spec)
-    return Path(data.output_dir) / identifier, identifier, spec
+    return output_dir / identifier, identifier, spec
 
 
 def write_manifest(directory: Path, identifier: str, spec: dict) -> None:

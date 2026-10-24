@@ -1,59 +1,28 @@
 import math
 import re
 from collections.abc import Iterable
-from typing import Annotated, ClassVar, Literal
-from typing import Self
+from typing import ClassVar, Literal
 
 import torch
-from pydantic import BeforeValidator, Field, model_validator
-from torch import Tensor
-from torch import nn
+from torch import Tensor, nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
 from looped_transformer.abstractions.data import MNLIBatch
-from looped_transformer.abstractions.model import ModelForwardOutput
-from looped_transformer.abstractions.model import TypedModule
+from looped_transformer.abstractions.model import ModelForwardOutput, TypedModule
 from looped_transformer.abstractions.training import StageTemplate
-from looped_transformer.config.base import (
-    ExclusiveProbability,
-    NonNegativeFloat,
-    OptionsModel,
-    PositiveInt,
-)
-from looped_transformer.config.torch.optimizer import AdamWOptions
-from looped_transformer.config.torch.scheduler import SchedulerOptions
-from looped_transformer.config.torch.scheduler import WarmupCosineOptions
-from looped_transformer.config.training import CommonStageOptions, StageOptions
 from looped_transformer.data_reader import MNLIDataProvider
 from looped_transformer.modules.loss import (
     AnchoredSampledLoopCrossEntropyLoss,
+    AnchoredSampledLoopLossOptions,
+)
+from looped_transformer.stages.config import CommonStageOptions, StageOptions
+from looped_transformer.stages.config.optimizer import AdamWOptions
+from looped_transformer.stages.config.scheduler import (
+    SchedulerOptions,
+    WarmupCosineOptions,
 )
 from looped_transformer.stages.registry import register_stage
-
-
-class AnchoredSampledLoopLossOptions(OptionsModel):
-    type: Literal["anchored_sampled_loop_cross_entropy"]
-    sampled_loops: Annotated[
-        tuple[PositiveInt, ...], BeforeValidator(tuple), Field(min_length=1)
-    ]
-    sampled_weights: Annotated[
-        tuple[NonNegativeFloat, ...], BeforeValidator(tuple), Field(min_length=1)
-    ]
-    sampled_loss_scale: NonNegativeFloat
-    label_smoothing: ExclusiveProbability = 0.0
-    time_rope_regularization_scale: NonNegativeFloat = 0.0
-
-    @model_validator(mode="after")
-    def validate_samples(self) -> Self:
-        if len(self.sampled_loops) != len(self.sampled_weights):
-            raise ValueError("sampled_loops and sampled_weights must have equal length")
-        if len(set(self.sampled_loops)) != len(self.sampled_loops):
-            raise ValueError("sampled_loops must not contain duplicates")
-        if not any(self.sampled_weights):
-            raise ValueError("at least one sampled-loop weight must be positive")
-        return self
-
 
 LossOptions = AnchoredSampledLoopLossOptions
 
@@ -148,13 +117,7 @@ def _build_loss(
     options: LossOptions,
 ) -> TypedModule[ModelForwardOutput, Tensor, Tensor]:
     if isinstance(options, AnchoredSampledLoopLossOptions):
-        loss = AnchoredSampledLoopCrossEntropyLoss(
-            sampled_loops=options.sampled_loops,
-            sampled_weights=options.sampled_weights,
-            sampled_loss_scale=options.sampled_loss_scale,
-            label_smoothing=options.label_smoothing,
-            time_rope_regularization_scale=options.time_rope_regularization_scale,
-        )
+        loss = AnchoredSampledLoopCrossEntropyLoss(options)
         return TypedModule(loss)
     raise TypeError(f"Unsupported loss options: {type(options).__name__}")
 

@@ -1,12 +1,13 @@
 import re
 
-from pydantic import Field
-from pydantic import field_validator
+from pydantic import Field, field_validator
 
-from looped_transformer.config import OptionsModel
-from looped_transformer.config.base import ExclusiveProbability
-from looped_transformer.config.base import NonNegativeFloat
-from looped_transformer.config.base import PositiveFloat
+from looped_transformer.config.base import (
+    ExclusiveProbability,
+    NonNegativeFloat,
+    OptionsModel,
+    PositiveFloat,
+)
 
 
 class AdamWOptions(OptionsModel):
@@ -16,7 +17,6 @@ class AdamWOptions(OptionsModel):
     beta2: ExclusiveProbability = 0.999
     epsilon: PositiveFloat = 1e-8
 
-    # noinspection nested-decorators
     @field_validator("learning_rates")
     @classmethod
     def compile_module_patterns(cls, value: dict[str, float]) -> dict[str, float]:

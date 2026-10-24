@@ -5,7 +5,19 @@ import torch.nn as nn
 import torch.nn.functional as functional
 from torch import Tensor
 
-from looped_transformer.utils.shared_cache import PositionalRoPECache, apply_rotary
+from looped_transformer.config.base import (
+    ExclusiveProbability,
+    OptionsModel,
+    PositiveInt,
+)
+from looped_transformer.utils.positional_rope_cache import PositionalRoPECache
+from looped_transformer.utils.rotary import apply_rotary
+
+
+class AttentionOptions(OptionsModel):
+    model_dimension: PositiveInt
+    heads_count: PositiveInt
+    dropout: ExclusiveProbability
 
 
 class RoPEMultiHeadAttention(nn.Module):
@@ -14,17 +26,18 @@ class RoPEMultiHeadAttention(nn.Module):
     def __init__(
         self,
         positional_rope_cache: PositionalRoPECache,
-        d_model: int,
-        n_heads: int,
-        dropout: float,
+        options: AttentionOptions,
     ):
         super().__init__()
         object.__setattr__(self, "_rope_cache", positional_rope_cache)
 
-        assert d_model % n_heads == 0, "d_model must be divisible by n_heads"
+        d_model = options.model_dimension
+        assert d_model % options.heads_count == 0, (
+            "d_model must be divisible by n_heads"
+        )
         self._d_model = d_model
-        self._n_heads = n_heads
-        self._d_head = d_model // n_heads
+        self._n_heads = options.heads_count
+        self._d_head = d_model // options.heads_count
         if self._d_head % 2 != 0:
             raise ValueError("The attention head dimension must be even for RoPE")
 
@@ -35,7 +48,7 @@ class RoPEMultiHeadAttention(nn.Module):
         self._v_proj = nn.Linear(d_model, d_model)
 
         self._out_proj = nn.Linear(d_model, d_model)
-        self._dropout = nn.Dropout(dropout)
+        self._dropout = nn.Dropout(options.dropout)
 
     def _apply_rope(self, x: Tensor) -> Tensor:
         seq_length = x.size(2)

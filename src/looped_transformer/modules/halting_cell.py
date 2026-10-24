@@ -3,37 +3,60 @@ from torch import Tensor, nn
 from torch.nn import functional
 
 from looped_transformer.abstractions.halting_cell import HaltingResult
-from looped_transformer.config.model import ModelOptions
+from looped_transformer.config.base import (
+    ExclusiveProbability,
+    FiniteFloat,
+    OptionsModel,
+    PositiveInt,
+)
 from looped_transformer.modules.masked_mean_pooling import MaskedMeanPooling
-from looped_transformer.modules.multi_head_attention import RoPEMultiHeadAttention
-from looped_transformer.utils.shared_cache import PositionalRoPECache
+from looped_transformer.modules.multi_head_attention import (
+    AttentionOptions,
+    RoPEMultiHeadAttention,
+)
+from looped_transformer.utils.positional_rope_cache import PositionalRoPECache
+
+
+class HaltingCellOptions(OptionsModel):
+    model_dimension: PositiveInt
+    ffn_dimension: PositiveInt
+    heads_count: PositiveInt
+    dropout: ExclusiveProbability
+    hazard_adjustment_scale: FiniteFloat
+    hazard_baseline_offset: FiniteFloat
+    hazard_baseline_scale: FiniteFloat
 
 
 class HaltingCell(nn.Module):
     def __init__(
-        self, positional_rope_cache: PositionalRoPECache, model_options: ModelOptions
+        self, positional_rope_cache: PositionalRoPECache, options: HaltingCellOptions
     ):
         super().__init__()
 
-        dim = model_options.hidden_state_dimension
-        dropout = model_options.dropout.controller
-        heads_count = model_options.transformer.attention_heads_count
-        mlp_dim = model_options.transformer.gelu_ffn_dimension
+        dim = options.model_dimension
+        dropout = options.dropout
+        heads_count = options.heads_count
+        mlp_dim = options.ffn_dimension
 
         self._hazard_adjustment_scale = nn.Parameter(
-            torch.tensor(model_options.halting.hazard_adjustment_scale)
+            torch.tensor(options.hazard_adjustment_scale)
         )
         self._hazard_baseline_offset = nn.Parameter(
-            torch.tensor(model_options.halting.hazard_baseline_offset)
+            torch.tensor(options.hazard_baseline_offset)
         )
         self._hazard_baseline_scale = nn.Parameter(
-            torch.tensor(model_options.halting.hazard_baseline_scale)
+            torch.tensor(options.hazard_baseline_scale)
         )
 
         self._rnn_cell = nn.GRUCell(input_size=dim, hidden_size=dim)
         self._attention_normalization = nn.RMSNorm(dim)
         self._attention = RoPEMultiHeadAttention(
-            positional_rope_cache, dim, heads_count, dropout
+            positional_rope_cache,
+            AttentionOptions(
+                model_dimension=dim,
+                heads_count=heads_count,
+                dropout=dropout,
+            ),
         )
         self._attention_dropout = nn.Dropout(dropout)
 

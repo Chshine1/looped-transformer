@@ -6,15 +6,19 @@ from collections.abc import Sequence
 import torch
 
 from looped_transformer.abstractions.model import TypedModule
-from looped_transformer.abstractions.training import ModelTrainingCollator
-from looped_transformer.abstractions.training import StageTemplate
-from looped_transformer.abstractions.training import TrainingState
-from looped_transformer.checkpoint_manager import (
-    CheckpointComponents,
-    CheckpointLoader,
-    CheckpointSaver,
+from looped_transformer.abstractions.training import (
+    ModelTrainingCollator,
+    StageTemplate,
+    TrainingState,
 )
-from looped_transformer.config.runtime import RuntimeOptions
+from looped_transformer.checkpoint import CheckpointComponents
+from looped_transformer.checkpoint_loader import CheckpointLoader
+from looped_transformer.checkpoint_saver import CheckpointSaver
+from looped_transformer.config.runtime import DeviceOptions, PrecisionOptions
+from looped_transformer.core.training.config import (
+    ReproducibilityOptions,
+    TrainingRuntimeOptions,
+)
 
 
 class ModelTrainer[TBatch, *TModelInput, TModelOutput, TLossInput]:
@@ -24,7 +28,10 @@ class ModelTrainer[TBatch, *TModelInput, TModelOutput, TLossInput]:
         collator: ModelTrainingCollator[TBatch, *TModelInput, TLossInput],
         checkpoint_saver: CheckpointSaver,
         checkpoint_loader: CheckpointLoader,
-        runtime_options: RuntimeOptions,
+        device_options: DeviceOptions,
+        precision_options: PrecisionOptions,
+        reproducibility_options: ReproducibilityOptions,
+        training_options: TrainingRuntimeOptions,
     ):
         self._model = model
         self._collator = collator
@@ -32,8 +39,11 @@ class ModelTrainer[TBatch, *TModelInput, TModelOutput, TLossInput]:
         self._checkpoint_saver = checkpoint_saver
         self._checkpoint_loader = checkpoint_loader
 
-        self._runtime_options = runtime_options
-        self._runtime_options.activate()
+        self._device_options = device_options
+        self._precision_options = precision_options
+        self._reproducibility_options = reproducibility_options
+        self._training_options = training_options
+        reproducibility_options.activate(device_options.device)
 
     def train(
         self,
@@ -72,7 +82,7 @@ class ModelTrainer[TBatch, *TModelInput, TModelOutput, TLossInput]:
                     resume_from = None
 
                 stage = dataclasses.replace(
-                    stage, loss=stage.loss.to(self._runtime_options.device)
+                    stage, loss=stage.loss.to(self._device_options.device)
                 )
                 for _ in range(state.epoch, stage.epochs):
                     self._run_epoch(stage, state, components)
@@ -96,19 +106,21 @@ class ModelTrainer[TBatch, *TModelInput, TModelOutput, TLossInput]:
             components.scaler,
         )
         stage.data_provider.reset_source(
-            shuffle=True, seed=self._runtime_options.seed + state.epoch
+            shuffle=True, seed=self._reproducibility_options.seed + state.epoch
         )
 
         try:
             batch_index = 0
             while (batch := stage.data_provider.fetch()) is not None:
                 i, o = self._collator.collate_batch(
-                    batch, self._runtime_options.device, self._runtime_options.dtype
+                    batch,
+                    self._device_options.device,
+                    self._precision_options.dtype,
                 )
                 acc_window_start, acc_window_end = self._get_accumulation_window(
                     stage.data_provider.get_batch_size(), batch_index, stage
                 )
-                with self._runtime_options.autocast:
+                with self._precision_options.autocast(self._device_options.device):
                     output = self._model(*i)
                     loss = stage.loss(output, o)
                     scaled_loss = loss / (acc_window_end - acc_window_start)
@@ -133,7 +145,7 @@ class ModelTrainer[TBatch, *TModelInput, TModelOutput, TLossInput]:
 
                 scheduler.step()
                 state.global_step += 1
-                if state.global_step % self._runtime_options.log_every_steps == 0:
+                if state.global_step % self._training_options.log_every_steps == 0:
                     print(
                         f"epoch={state.epoch + 1} step={state.global_step} "
                         f"lr={scheduler.get_last_lr()[0]:.3e}"
@@ -161,9 +173,9 @@ class ModelTrainer[TBatch, *TModelInput, TModelOutput, TLossInput]:
         )
         scheduler = stage.scheduler_factory(optimizer)
         scaler = torch.amp.GradScaler(
-            self._runtime_options.device.type,
-            enabled=self._runtime_options.amp_enabled
-            and self._runtime_options.amp_dtype == torch.float16,
+            self._device_options.device.type,
+            enabled=self._precision_options.amp_enabled
+            and self._precision_options.amp_dtype == torch.float16,
         )
         optimizer.zero_grad(set_to_none=True)
 

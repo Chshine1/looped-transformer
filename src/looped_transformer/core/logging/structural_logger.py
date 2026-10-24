@@ -4,10 +4,16 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
 
+from looped_transformer.config.base import ConfigPath, OptionsModel
+
+
+class EvaluationOutputOptions(OptionsModel):
+    directory: ConfigPath
+
 
 class StructuralLogger:
-    def __init__(self, output_dir: str | Path) -> None:
-        self.output_dir = Path(output_dir)
+    def __init__(self, options: EvaluationOutputOptions) -> None:
+        self.output_dir = Path(options.directory)
         self.batch_log_path = self.output_dir / "batches.jsonl"
 
     def start(self) -> None:

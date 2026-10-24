@@ -2,13 +2,17 @@ import torch
 
 from looped_transformer.abstractions.model import TypedModule
 from looped_transformer.abstractions.training import (
-    ModelTrainingCollator,
     IDataProvider,
+    ModelTrainingCollator,
 )
-from looped_transformer.checkpoint_manager import CheckpointLoader
-from looped_transformer.config import RuntimeOptions
-from looped_transformer.config.evaluation import EvaluationOptions
+from looped_transformer.checkpoint_loader import CheckpointLoader
+from looped_transformer.config.base import ConfigPath, OptionsModel
+from looped_transformer.config.runtime import DeviceOptions, PrecisionOptions
 from looped_transformer.core.evaluation.policy import EvaluationPolicy
+
+
+class EvaluationCheckpointOptions(OptionsModel):
+    path: ConfigPath
 
 
 class Evaluator[TBatch, *TModelInput, TModelOutput, TLossInput]:
@@ -19,18 +23,20 @@ class Evaluator[TBatch, *TModelInput, TModelOutput, TLossInput]:
         policy: EvaluationPolicy[TBatch, *TModelInput, TModelOutput],
         data_provider: IDataProvider[TBatch],
         checkpoint_loader: CheckpointLoader,
-        runtime_options: RuntimeOptions,
-        evaluation_options: EvaluationOptions,
+        device_options: DeviceOptions,
+        precision_options: PrecisionOptions,
+        checkpoint_options: EvaluationCheckpointOptions,
     ) -> None:
         self._model = model
         self._collator = collator
         self._policy = policy
         self._data_provider = data_provider
 
-        self._runtime_options = runtime_options
+        self._device_options = device_options
+        self._precision_options = precision_options
 
         try:
-            checkpoint_loader.load(evaluation_options.checkpoint_path)
+            checkpoint_loader.load(checkpoint_options.path)
             checkpoint_loader.load_model(self._model.torch)
         finally:
             checkpoint_loader.dispose()
@@ -44,11 +50,16 @@ class Evaluator[TBatch, *TModelInput, TModelOutput, TLossInput]:
             self._data_provider.reset_source(shuffle=False, seed=None)
             self._model.torch.eval()
             while (batch := self._data_provider.fetch()) is not None:
-                i, o = self._collator.collate_batch(
-                    batch, self._runtime_options.device, self._runtime_options.dtype
+                i, _ = self._collator.collate_batch(
+                    batch,
+                    self._device_options.device,
+                    self._precision_options.dtype,
                 )
 
-                with torch.no_grad(), self._runtime_options.autocast:
+                with (
+                    torch.no_grad(),
+                    self._precision_options.autocast(self._device_options.device),
+                ):
                     output = self._model(*i)
 
                 self._policy.attend_batch(batch, output)

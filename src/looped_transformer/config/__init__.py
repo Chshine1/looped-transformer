@@ -1,21 +1,23 @@
 from pathlib import Path
-from typing import Any
-from typing import cast
+from typing import Any, cast
 
-from hydra import initialize_config_dir, compose
+from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 
+from looped_transformer.checkpoint_saver import CheckpointSavingOptions
 from looped_transformer.config.base import OptionsModel
-from looped_transformer.config.data import CommonDataOptions
-from looped_transformer.config.data import DataOptions
-from looped_transformer.config.model import ModelOptions
 from looped_transformer.config.runtime import RuntimeOptions
+from looped_transformer.modules.model import ModelOptions
+from looped_transformer.stages.config import TrainingOptions
+from looped_transformer.tokenizer import TokenizerOptions
 
 
 class AppOptions(OptionsModel):
     runtime: RuntimeOptions
-    data: CommonDataOptions
+    checkpoint: CheckpointSavingOptions
+    tokenizer: TokenizerOptions
     model: ModelOptions
+    training: TrainingOptions
 
 
 def load_options(
