@@ -4757,7 +4757,7 @@ packages:
   - zstd >=1.5.7,<1.6.0a0
   license: BSD-3-Clause AND MIT AND EPL-2.0
   purls:
-  - pkg:pypi/backports-zstd?source=hash-mapping
+  - pkg:pypi/backports-zstd?source=compressed-mapping
   run_exports: {}
   size: 242878
   timestamp: 1788491289149

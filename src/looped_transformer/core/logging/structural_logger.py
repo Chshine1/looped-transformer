@@ -4,7 +4,7 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
 
-from looped_transformer.config.base import ConfigPath, OptionsModel
+from looped_transformer.core.config.base import ConfigPath, OptionsModel
 
 
 class EvaluationOutputOptions(OptionsModel):

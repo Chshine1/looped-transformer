@@ -3,16 +3,18 @@ import re
 
 import torch
 
-from looped_transformer.abstractions.model import TypedModule
-from looped_transformer.abstractions.training import (
+from looped_transformer.core.abstractions.model import TypedModule
+from looped_transformer.core.abstractions.training import (
     ModelTrainingCollator,
     TrainingStage,
     TrainingState,
 )
-from looped_transformer.checkpoint import CheckpointComponents
-from looped_transformer.checkpoint_loader import CheckpointLoader
-from looped_transformer.checkpoint_saver import CheckpointSaver
-from looped_transformer.config.runtime import DeviceOptions, PrecisionOptions
+from looped_transformer.core.checkpointing import (
+    CheckpointComponents,
+    CheckpointLoader,
+    CheckpointSaver,
+)
+from looped_transformer.core.config.runtime import DeviceOptions, PrecisionOptions
 from looped_transformer.core.training.config import (
     ReproducibilityOptions,
     TrainingRuntimeOptions,

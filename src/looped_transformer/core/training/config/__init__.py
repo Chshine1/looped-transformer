@@ -2,7 +2,11 @@ import random
 
 import torch
 
-from looped_transformer.config.base import NonNegativeInt, OptionsModel, PositiveInt
+from looped_transformer.core.config.base import (
+    NonNegativeInt,
+    OptionsModel,
+    PositiveInt,
+)
 
 
 class ReproducibilityOptions(OptionsModel):

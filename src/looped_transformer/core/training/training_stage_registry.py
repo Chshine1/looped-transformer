@@ -1,37 +1,23 @@
-from typing import Callable
-from typing import TypedDict
+from collections.abc import Callable
 
-from pydantic import JsonValue
 from torch import Tensor
 
-from looped_transformer.abstractions.model import TypedModule
-from looped_transformer.abstractions.training import IDataProvider
-from looped_transformer.abstractions.training.training_stage_template import (
+from looped_transformer.core.abstractions.model import TypedModule
+from looped_transformer.core.abstractions.training import IDataProvider
+from looped_transformer.core.abstractions.training.training_stage_template import (
     OptimizerFactory,
-)
-from looped_transformer.abstractions.training.training_stage_template import (
     SchedulerFactory,
-)
-from looped_transformer.abstractions.training.training_stage_template import (
     TrainingStage,
 )
-from looped_transformer.config.base import OptionsModel
-from looped_transformer.stages.config import StageTemplate
-
-
-class TrainingStageRegistryOptions(OptionsModel):
-    class _StageTemplateModel(TypedDict, extra_items=JsonValue):
-        type: str
-
-    stage_templates: dict[str, _StageTemplateModel]
+from looped_transformer.core.training.stage import StageTemplate, TrainingOptions
 
 
 class TrainingStageRegistry[TBatch, TModelOutput, TLossInput]:
-    def __init__(self, options: TrainingStageRegistryOptions) -> None:
+    def __init__(self, options: TrainingOptions) -> None:
         self._options = options
         self._registered_factories: dict[
             str, Callable[[], TrainingStage[TBatch, TModelOutput, TLossInput]]
-        ]
+        ] = {}
 
     def register[TTemplate: StageTemplate](
         self,
@@ -45,12 +31,11 @@ class TrainingStageRegistry[TBatch, TModelOutput, TLossInput]:
             [TTemplate, IDataProvider[TBatch]], SchedulerFactory
         ],
     ) -> None:
-        for stage_id, raw_dict in self._options.stage_templates.items():
-            if template.type != raw_dict["type"]:
-                continue
-            validated = template.model_validate(raw_dict)
-            data_provider = data_provider_factory(validated)
-
+        def create_factory(
+            stage_id: str,
+            validated: TTemplate,
+            data_provider: IDataProvider[TBatch],
+        ) -> Callable[[], TrainingStage[TBatch, TModelOutput, TLossInput]]:
             def get_stage() -> TrainingStage[TBatch, TModelOutput, TLossInput]:
                 return TrainingStage(
                     id=stage_id,
@@ -61,7 +46,20 @@ class TrainingStageRegistry[TBatch, TModelOutput, TLossInput]:
                     scheduler_factory=get_scheduler_factory(validated, data_provider),
                 )
 
-            self._registered_factories[stage_id] = get_stage
+            return get_stage
+
+        for stage_id, raw_dict in self._options.stage_templates.items():
+            if template.type != raw_dict.get("type"):
+                continue
+            template_values = {
+                key: value for key, value in raw_dict.items() if key != "type"
+            }
+            validated = template.model_validate(template_values)
+            data_provider = data_provider_factory(validated)
+
+            self._registered_factories[stage_id] = create_factory(
+                stage_id, validated, data_provider
+            )
 
     def resolve(self, stage_id: str) -> TrainingStage[TBatch, TModelOutput, TLossInput]:
         return self._registered_factories[stage_id]()

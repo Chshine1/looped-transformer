@@ -1,10 +1,10 @@
-from looped_transformer.abstractions.model import TypedModule
-from looped_transformer.abstractions.training import (
+from looped_transformer.core.abstractions.model import TypedModule
+from looped_transformer.core.abstractions.training import (
     IDataProvider,
     ModelTrainingCollator,
 )
-from looped_transformer.checkpoint_loader import CheckpointLoader
-from looped_transformer.config.runtime import DeviceOptions, PrecisionOptions
+from looped_transformer.core.checkpointing.loader import CheckpointLoader
+from looped_transformer.core.config.runtime import DeviceOptions, PrecisionOptions
 from looped_transformer.core.evaluation import Evaluator
 from looped_transformer.core.evaluation.evaluator import EvaluationCheckpointOptions
 from looped_transformer.core.evaluation.policy import EvaluationPolicy

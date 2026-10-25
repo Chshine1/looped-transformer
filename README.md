@@ -40,6 +40,21 @@ pixi run typecheck
 pixi run train
 ```
 
+## Project structure
+
+The codebase is organized as a modular monolith with a one-way dependency graph:
+
+- `looped_transformer.core` contains domain-independent contracts,
+  checkpointing, training/evaluation infrastructure, PyTorch extensions, and
+  reusable neural-network components;
+- `looped_transformer.domains.mnli` contains the complete MNLI vertical slice;
+- `looped_transformer.app` is the configuration, dependency-injection, and CLI
+  composition root.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the dependency rules, guidance for
+adding another training domain, and when it would be worthwhile to split this
+distribution into a multi-project Python workspace.
+
 ## Evaluation
 
 Evaluation is composed from an inference runner and an evaluation policy. The
