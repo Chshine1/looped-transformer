@@ -1,7 +1,7 @@
 import math
 import re
 from collections.abc import Iterable
-from typing import ClassVar, Literal
+from typing import ClassVar
 
 import torch
 from torch import Tensor, nn
@@ -10,123 +10,42 @@ from torch.optim.lr_scheduler import LRScheduler
 
 from looped_transformer.abstractions.data import MNLIBatch
 from looped_transformer.abstractions.model import ModelForwardOutput, TypedModule
-from looped_transformer.abstractions.training import StageTemplate
+from looped_transformer.abstractions.training.data_provider import IDataProvider
+from looped_transformer.abstractions.training.training_stage_template import (
+    OptimizerFactory,
+)
+from looped_transformer.abstractions.training.training_stage_template import (
+    SchedulerFactory,
+)
+from looped_transformer.core.training.training_stage_registry import (
+    TrainingStageRegistry,
+)
+from looped_transformer.data_reader import MNLIDataOptions
 from looped_transformer.data_reader import MNLIDataProvider
 from looped_transformer.modules.loss import (
     AnchoredSampledLoopCrossEntropyLoss,
     AnchoredSampledLoopLossOptions,
 )
-from looped_transformer.stages.config import CommonStageOptions, StageOptions
+from looped_transformer.stages.config import StageTemplate
 from looped_transformer.stages.config.optimizer import AdamWOptions
 from looped_transformer.stages.config.scheduler import (
     SchedulerOptions,
     WarmupCosineOptions,
 )
-from looped_transformer.stages.registry import register_stage
-
-LossOptions = AnchoredSampledLoopLossOptions
 
 
-class LoopedMNLIStageOptions(StageOptions):
-    stage_type: ClassVar[str] = "looped_mnli"
-
-    common: CommonStageOptions
-    optimizer: AdamWOptions
-    scheduler: SchedulerOptions
-    loss: LossOptions
-    type: Literal["looped_mnli"]
-
-
-def _build_stage_template(
-    template_id: str,
-    options: StageOptions,
-) -> StageTemplate[MNLIBatch, ModelForwardOutput, Tensor]:
-    if not isinstance(options, LoopedMNLIStageOptions):
-        raise TypeError("looped_mnli requires LoopedMNLIStageOptions")
-
-    data_options = options.common.data
-    data_provider = MNLIDataProvider(data_options)
-
-    def get_optimizer(
-        named_parameters: Iterable[tuple[str, nn.parameter.Parameter]],
-    ) -> Optimizer:
-        optimizer = options.optimizer
-        return torch.optim.AdamW(
-            _get_parameter_groups(named_parameters, optimizer),
-            betas=(optimizer.beta1, optimizer.beta2),
-            eps=optimizer.epsilon,
-            weight_decay=optimizer.weight_decay,
-        )
-
-    def get_scheduler(optimizer: Optimizer) -> LRScheduler:
-        row_count = data_provider.get_samples_count()
-        batches_per_epoch = math.ceil(row_count / data_options.batch_size)
-        steps_per_epoch = math.ceil(
-            batches_per_epoch / options.common.gradient_accumulation_steps
-        )
-        total_steps = options.common.epochs * steps_per_epoch
-        scheduler = options.scheduler
-        warmup_steps = max(1, int(scheduler.warmup_ratio * total_steps))
-        warmup = torch.optim.lr_scheduler.LinearLR(
-            optimizer,
-            start_factor=scheduler.warmup_start_factor,
-            end_factor=1.0,
-            total_iters=warmup_steps,
-        )
-        if isinstance(scheduler, WarmupCosineOptions):
-            cosine_steps = max(1, total_steps - warmup_steps)
-            minimum_factor = scheduler.minimum_learning_rate_factor
-
-            def cosine_factor(step: int) -> float:
-                progress = min(step, cosine_steps) / cosine_steps
-                return (
-                    minimum_factor
-                    + (1 - minimum_factor) * (1 + math.cos(math.pi * progress)) / 2
-                )
-
-            after_warmup = torch.optim.lr_scheduler.LambdaLR(
-                optimizer, lr_lambda=cosine_factor
-            )
-        else:
-            after_warmup = torch.optim.lr_scheduler.ConstantLR(
-                optimizer,
-                factor=1.0,
-                total_iters=max(1, total_steps - warmup_steps),
-            )
-        return torch.optim.lr_scheduler.SequentialLR(
-            optimizer, [warmup, after_warmup], [warmup_steps]
-        )
-
-    common = options.common
-    return StageTemplate(
-        id=template_id,
-        data_provider=data_provider,
-        loss=_build_loss(options.loss),
-        frozen_patterns=common.frozen_patterns,
-        evaluation_patterns=common.evaluation_patterns,
-        optimizer_factory=get_optimizer,
-        scheduler_factory=get_scheduler,
-        epochs=common.epochs,
-        max_gradient_norm=common.max_gradient_norm,
-        gradient_accumulation_steps=common.gradient_accumulation_steps,
-        save_every_epochs=common.save_every_epochs,
-    )
-
-
-def _build_loss(
-    options: LossOptions,
-) -> TypedModule[ModelForwardOutput, Tensor, Tensor]:
-    if isinstance(options, AnchoredSampledLoopLossOptions):
-        loss = AnchoredSampledLoopCrossEntropyLoss(options)
-        return TypedModule(loss)
-    raise TypeError(f"Unsupported loss options: {type(options).__name__}")
+class LoopedMNLIStageTemplate(StageTemplate):
+    type: ClassVar[str] = "looped_mnli"
+    data_options: MNLIDataOptions
+    loss_options: AnchoredSampledLoopLossOptions
+    optimizer_options: AdamWOptions
+    scheduler_options: SchedulerOptions
 
 
 def _get_parameter_groups(
     named_parameters: Iterable[tuple[str, nn.parameter.Parameter]],
     options: AdamWOptions,
 ) -> list[dict]:
-    """Group parameters by the first regex matching their owning module name."""
     patterns = [
         (re.compile(module_pattern), learning_rate)
         for module_pattern, learning_rate in options.learning_rates.items()
@@ -166,4 +85,84 @@ def _get_parameter_groups(
     ]
 
 
-register_stage(LoopedMNLIStageOptions, _build_stage_template)
+def _get_data_provider(template: LoopedMNLIStageTemplate) -> IDataProvider[MNLIBatch]:
+    return MNLIDataProvider(template.data_options)
+
+
+def _get_loss(
+    template: LoopedMNLIStageTemplate,
+) -> TypedModule[ModelForwardOutput, Tensor, Tensor]:
+    loss = AnchoredSampledLoopCrossEntropyLoss(template.loss_options)
+    return TypedModule(loss)
+
+
+def _get_optimizer_factory(template: LoopedMNLIStageTemplate) -> OptimizerFactory:
+    def get_optimizer(
+        named_parameters: Iterable[tuple[str, nn.parameter.Parameter]],
+    ) -> Optimizer:
+        optimizer = template.optimizer_options
+        return torch.optim.AdamW(
+            _get_parameter_groups(named_parameters, optimizer),
+            betas=(optimizer.beta1, optimizer.beta2),
+            eps=optimizer.epsilon,
+            weight_decay=optimizer.weight_decay,
+        )
+
+    return get_optimizer
+
+
+def _get_scheduler_factory(
+    template: LoopedMNLIStageTemplate, data_provider: IDataProvider[MNLIBatch]
+) -> SchedulerFactory:
+    def get_scheduler(optimizer: Optimizer) -> LRScheduler:
+        row_count = data_provider.get_samples_count()
+        batches_per_epoch = math.ceil(row_count / template.data_options.batch_size)
+        steps_per_epoch = math.ceil(
+            batches_per_epoch / template.options.gradient_accumulation_steps
+        )
+        total_steps = template.options.epochs * steps_per_epoch
+        scheduler = template.scheduler_options
+        warmup_steps = max(1, int(scheduler.warmup_ratio * total_steps))
+        warmup = torch.optim.lr_scheduler.LinearLR(
+            optimizer,
+            start_factor=scheduler.warmup_start_factor,
+            end_factor=1.0,
+            total_iters=warmup_steps,
+        )
+        if isinstance(scheduler, WarmupCosineOptions):
+            cosine_steps = max(1, total_steps - warmup_steps)
+            minimum_factor = scheduler.minimum_learning_rate_factor
+
+            def cosine_factor(step: int) -> float:
+                progress = min(step, cosine_steps) / cosine_steps
+                return (
+                    minimum_factor
+                    + (1 - minimum_factor) * (1 + math.cos(math.pi * progress)) / 2
+                )
+
+            after_warmup = torch.optim.lr_scheduler.LambdaLR(
+                optimizer, lr_lambda=cosine_factor
+            )
+        else:
+            after_warmup = torch.optim.lr_scheduler.ConstantLR(
+                optimizer,
+                factor=1.0,
+                total_iters=max(1, total_steps - warmup_steps),
+            )
+        return torch.optim.lr_scheduler.SequentialLR(
+            optimizer, [warmup, after_warmup], [warmup_steps]
+        )
+
+    return get_scheduler
+
+
+def register_looped_mnli_stage_template(
+    stage_registry: TrainingStageRegistry[MNLIBatch, ModelForwardOutput, Tensor],
+) -> None:
+    stage_registry.register(
+        LoopedMNLIStageTemplate,
+        _get_data_provider,
+        _get_loss,
+        _get_optimizer_factory,
+        _get_scheduler_factory,
+    )

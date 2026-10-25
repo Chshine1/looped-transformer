@@ -17,7 +17,7 @@ from looped_transformer.core.training.config import (
     TrainingRuntimeOptions,
 )
 from looped_transformer.core.training.model_trainer_factory import ModelTrainerFactory
-from looped_transformer.data_reader import DataOptions
+from looped_transformer.data_reader import MNLIDataOptions
 from looped_transformer.modules.config import LoopOptions
 from looped_transformer.modules.controller_teacher import ControllerTeacherOptions
 from looped_transformer.modules.model import ModelOptions
@@ -64,7 +64,7 @@ def configure_evaluation(container: Container, options: EvaluationOptions) -> Co
     evaluation_container[EvaluationCheckpointOptions] = options.checkpoint
     evaluation_container[EvaluationOutputOptions] = options.output
     evaluation_container[LoopDiagnosticsOptions] = options.diagnostics
-    evaluation_container[DataOptions] = options.data
+    evaluation_container[MNLIDataOptions] = options.data
     evaluation_container[StructuralLogger] = Singleton(StructuralLogger)
     evaluation_container[EvaluatorFactory] = Singleton(EvaluatorFactory)
     return evaluation_container

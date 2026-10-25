@@ -22,7 +22,10 @@ from looped_transformer.config.sequence import SequenceOptions
 from looped_transformer.core.evaluation.evaluator_factory import EvaluatorFactory
 from looped_transformer.core.logging import StructuralLogger
 from looped_transformer.core.training.model_trainer_factory import ModelTrainerFactory
-from looped_transformer.data_reader import DataOptions, MNLIDataProvider
+from looped_transformer.core.training.training_stage_registry import (
+    TrainingStageRegistry,
+)
+from looped_transformer.data_reader import MNLIDataOptions, MNLIDataProvider
 from looped_transformer.dependency_injection import (
     build_container,
     configure_evaluation,
@@ -30,7 +33,6 @@ from looped_transformer.dependency_injection import (
 from looped_transformer.modules.config import LoopOptions
 from looped_transformer.modules.model import LoopedMNLI, ModelOptions
 from looped_transformer.policies import LoopDiagnosticsPolicy
-from looped_transformer.stages import build_stage_templates
 from looped_transformer.tokenizer import MNLITokenizer
 
 
@@ -120,16 +122,18 @@ def main() -> None:
     container = build_container(options)
 
     if args.command == "train":
-        stages = build_stage_templates(options.training)
         trainer_factory = container[ModelTrainerFactory]
 
         make_model = container.partial(_model_factory)
         make_collator = container.partial(MNLICollator)
 
         trainer = trainer_factory.create(make_model(), make_collator())
-        trainer.train(stages, args.resume)
+        stage_registry = container[
+            TrainingStageRegistry[MNLIBatch, ModelForwardOutput, Tensor]
+        ]
+        trainer.train(stage_registry.resolve("backbone_warmup"), args.resume)
     if args.command == "eval":
-        data_options = DataOptions(
+        data_options = MNLIDataOptions(
             seed=42,
             file_path=args.data_file,
             batch_size=args.batch_size,

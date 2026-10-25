@@ -1,14 +1,12 @@
-import dataclasses
 import math
 import re
-from collections.abc import Sequence
 
 import torch
 
 from looped_transformer.abstractions.model import TypedModule
 from looped_transformer.abstractions.training import (
     ModelTrainingCollator,
-    StageTemplate,
+    TrainingStage,
     TrainingState,
 )
 from looped_transformer.checkpoint import CheckpointComponents
@@ -47,7 +45,7 @@ class ModelTrainer[TBatch, *TModelInput, TModelOutput, TLossInput]:
 
     def train(
         self,
-        stages: Sequence[StageTemplate[TBatch, TModelOutput, TLossInput]],
+        stage: TrainingStage[TBatch, TModelOutput, TLossInput],
         resume_from: str | None,
     ) -> None:
         state = TrainingState(
@@ -62,41 +60,26 @@ class ModelTrainer[TBatch, *TModelInput, TModelOutput, TLossInput]:
                 self._checkpoint_loader.load(resume_from)
                 state = self._checkpoint_loader.load_training_state()
 
-            beginning_stage_index = 0
-            if state.stage_id:
-                beginning_stage_index = next(
-                    (i for i, stage in enumerate(stages) if stage.id == state.stage_id),
-                    -1,
-                )
-                if beginning_stage_index < 0:
-                    raise ValueError(
-                        f"Checkpoint stage is not configured: {state.stage_id!r}"
-                    )
-
             self._model.torch.train()
-            for stage in stages[beginning_stage_index:]:
-                components = self._on_stage_begin(stage, state)
-                if resume_from is not None:
-                    self._checkpoint_loader.load_components(components)
-                    self._checkpoint_loader.dispose()
-                    resume_from = None
+            components = self._on_stage_begin(stage, state)
+            if resume_from is not None:
+                self._checkpoint_loader.load_components(components)
+                self._checkpoint_loader.dispose()
 
-                stage = dataclasses.replace(
-                    stage, loss=stage.loss.to(self._device_options.device)
-                )
-                for _ in range(state.epoch, stage.epochs):
-                    self._run_epoch(stage, state, components)
-                    state.epoch += 1
-                    self._on_epoch_end(stage, state, components)
+            stage.loss = stage.loss.to(self._device_options.device)
+            for _ in range(state.epoch, stage.stage_options.epochs):
+                self._run_epoch(stage, state, components)
+                state.epoch += 1
+                self._on_epoch_end(stage, state, components)
 
-                state.epoch = 0
+            state.epoch = 0
         finally:
             self._checkpoint_loader.dispose()
             self._model.torch.train(was_training)
 
     def _run_epoch(
         self,
-        stage: StageTemplate[TBatch, TModelOutput, TLossInput],
+        stage: TrainingStage[TBatch, TModelOutput, TLossInput],
         state: TrainingState,
         components: CheckpointComponents,
     ) -> None:
@@ -132,7 +115,8 @@ class ModelTrainer[TBatch, *TModelInput, TModelOutput, TLossInput]:
 
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(
-                    self._model.torch.parameters(), stage.max_gradient_norm
+                    self._model.torch.parameters(),
+                    stage.stage_options.max_gradient_norm,
                 )
                 scale_before = scaler.get_scale()
                 scaler.step(optimizer)
@@ -154,15 +138,19 @@ class ModelTrainer[TBatch, *TModelInput, TModelOutput, TLossInput]:
             stage.data_provider.close()
 
     def _on_stage_begin(
-        self, stage: StageTemplate, state: TrainingState
+        self, stage: TrainingStage, state: TrainingState
     ) -> CheckpointComponents:
         state.stage_id = stage.id
         for name, param in self._model.torch.named_parameters():
-            param.requires_grad = not bool(re.match(stage.frozen_patterns, name))
+            param.requires_grad = not bool(
+                re.match(stage.stage_options.frozen_patterns, name)
+            )
         for name, module in self._model.torch.named_modules():
             if name == "":
                 continue
-            module.train(not bool(re.match(stage.evaluation_patterns, name)))
+            module.train(
+                not bool(re.match(stage.stage_options.evaluation_patterns, name))
+            )
 
         optimizer = stage.optimizer_factory(
             (
@@ -190,20 +178,20 @@ class ModelTrainer[TBatch, *TModelInput, TModelOutput, TLossInput]:
 
     def _on_epoch_end(
         self,
-        stage: StageTemplate,
+        stage: TrainingStage,
         state: TrainingState,
         components: CheckpointComponents,
     ) -> None:
-        should_save = state.epoch % stage.save_every_epochs == 0
+        should_save = state.epoch % stage.stage_options.save_every_epochs == 0
 
         if should_save:
             self._checkpoint_saver.save_epoch(state, components)
 
     @staticmethod
     def _get_accumulation_window(
-        batch_size: int, batch_index: int, stage: StageTemplate
+        batch_size: int, batch_index: int, stage: TrainingStage
     ) -> tuple[int, int]:
-        accumulation_steps = stage.gradient_accumulation_steps
+        accumulation_steps = stage.stage_options.gradient_accumulation_steps
         batches_count = math.ceil(stage.data_provider.get_samples_count() / batch_size)
 
         window_start = (batch_index // accumulation_steps) * accumulation_steps

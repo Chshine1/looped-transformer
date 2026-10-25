@@ -20,7 +20,7 @@ from looped_transformer.config.base import (
 )
 
 
-class DataOptions(OptionsModel):
+class MNLIDataOptions(OptionsModel):
     seed: NonNegativeInt
     file_path: ConfigPath
     batch_size: PositiveInt
@@ -34,7 +34,7 @@ class DataOptions(OptionsModel):
 class MNLIDataProvider(IDataProvider[MNLIBatch]):
     CACHE_FORMAT = "mnli-shuffle-chunks-v1"
 
-    def __init__(self, data_options: DataOptions):
+    def __init__(self, data_options: MNLIDataOptions):
         self._data_options = data_options
         self._path = data_options.file_path
 

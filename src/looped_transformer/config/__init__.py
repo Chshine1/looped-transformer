@@ -24,10 +24,6 @@ def load_options(
     config_dir: str,
     overrides: list[str],
 ) -> AppOptions:
-    from looped_transformer.stages import ensure_builtin_stages_registered
-
-    ensure_builtin_stages_registered()
-
     with initialize_config_dir(
         version_base=None,
         config_dir=str(Path(config_dir).resolve()),
