@@ -1,5 +1,3 @@
-"""Contract for adapting domain batches to model inputs."""
-
 from abc import ABC, abstractmethod
 
 import torch

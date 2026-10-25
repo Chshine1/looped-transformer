@@ -1,5 +1,3 @@
-"""Training data source contract."""
-
 from abc import ABC, abstractmethod
 
 

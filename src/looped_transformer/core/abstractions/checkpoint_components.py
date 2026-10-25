@@ -1,5 +1,3 @@
-"""Checkpoint data transfer objects."""
-
 from dataclasses import dataclass
 
 import torch

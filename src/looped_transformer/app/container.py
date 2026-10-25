@@ -1,11 +1,8 @@
-"""Application composition root."""
-
 from lagom import Container, Singleton
 from lagom.interfaces import ReadableContainer
 from torch import Tensor
 
 from looped_transformer.app.config import AppOptions
-from looped_transformer.core.abstractions.model import ModelForwardOutput
 from looped_transformer.core.artifacts import ArtifactSpec
 from looped_transformer.core.checkpointing import CheckpointLoader, CheckpointSaver
 from looped_transformer.core.checkpointing.saver import CheckpointSavingOptions
@@ -24,21 +21,22 @@ from looped_transformer.core.training.model_trainer_factory import ModelTrainerF
 from looped_transformer.core.training.training_stage_registry import (
     TrainingStageRegistry,
 )
-from looped_transformer.domains.mnli.batch import MNLIBatch
-from looped_transformer.domains.mnli.controller_teacher import (
+from looped_transformer.domains.controller_teacher.controller_teacher import (
     ControllerTeacherOptions,
 )
-from looped_transformer.domains.mnli.data import MNLIDataOptions
-from looped_transformer.domains.mnli.evaluation import EvaluationOptions
-from looped_transformer.domains.mnli.model import ModelOptions
-from looped_transformer.domains.mnli.policies.loop_diagnostics import (
+from looped_transformer.domains.mnli.evaluation.evaluation import EvaluationOptions
+from looped_transformer.domains.mnli.evaluation.loop_diagnostics import (
     LoopDiagnosticsOptions,
 )
-from looped_transformer.domains.mnli.stage import register_looped_mnli_stage_template
-from looped_transformer.domains.mnli.tokenizer import (
-    MNLITokenizer,
-    TokenizerOptions,
+from looped_transformer.domains.mnli.model import ModelOptions
+from looped_transformer.domains.mnli.services.data_provider import MNLIDataOptions
+from looped_transformer.domains.mnli.services.tokenizer import MNLITokenizer
+from looped_transformer.domains.mnli.services.tokenizer import TokenizerOptions
+from looped_transformer.domains.mnli.training.stage import (
+    register_looped_mnli_stage_template,
 )
+from looped_transformer.domains.mnli.types.batch import MNLIBatch
+from looped_transformer.domains.mnli.types.model import ModelForwardOutput
 
 
 def build_container(options: AppOptions) -> Container:

@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from looped_transformer.core.abstractions.model import TypedModule
+from looped_transformer.core.abstractions.typed_module import TypedModule
 
 
 class EvaluationPolicy[TBatch, *TModelInput, TModelOutput](ABC):

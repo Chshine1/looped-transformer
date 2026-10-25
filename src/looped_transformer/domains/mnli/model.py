@@ -1,5 +1,3 @@
-"""Looped transformer used by the MNLI domain."""
-
 import math
 
 import torch
@@ -7,8 +5,7 @@ import torch.nn as nn
 from pydantic import Field, model_validator
 from torch import Tensor
 
-from looped_transformer.core.abstractions.model import IModule, ModelForwardOutput
-from looped_transformer.core.abstractions.tokenizer import TokenizerInfo
+from looped_transformer.core.abstractions.typed_module import IModule
 from looped_transformer.core.config.base import OptionsModel, PositiveInt
 from looped_transformer.core.config.sequence import SequenceOptions
 from looped_transformer.core.nn.attention_residual import (
@@ -40,6 +37,8 @@ from looped_transformer.core.nn.timed_rope import (
     TimedMultiHeadRoPECache,
     TimedRoPEOptions,
 )
+from looped_transformer.domains.mnli.types.model import ModelForwardOutput
+from looped_transformer.domains.mnli.types.tokenizer import TokenizerInfo
 
 
 class ModelOptions(OptionsModel):

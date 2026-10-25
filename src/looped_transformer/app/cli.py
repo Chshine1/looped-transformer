@@ -1,5 +1,3 @@
-"""Command-line interface for the MNLI application."""
-
 import argparse
 import json
 from pathlib import Path
@@ -8,7 +6,7 @@ from torch import Tensor
 
 from looped_transformer.app.config import load_options
 from looped_transformer.app.container import build_container, configure_evaluation
-from looped_transformer.core.abstractions.model import ModelForwardOutput, TypedModule
+from looped_transformer.core.abstractions.typed_module import TypedModule
 from looped_transformer.core.config.runtime import DeviceOptions, PrecisionOptions
 from looped_transformer.core.config.sequence import SequenceOptions
 from looped_transformer.core.evaluation.evaluator import EvaluationCheckpointOptions
@@ -20,16 +18,21 @@ from looped_transformer.core.training.model_trainer_factory import ModelTrainerF
 from looped_transformer.core.training.training_stage_registry import (
     TrainingStageRegistry,
 )
-from looped_transformer.domains.mnli.batch import MNLIBatch
-from looped_transformer.domains.mnli.collator import MNLICollator
-from looped_transformer.domains.mnli.data import MNLIDataOptions, MNLIDataProvider
-from looped_transformer.domains.mnli.evaluation import EvaluationOptions
-from looped_transformer.domains.mnli.model import LoopedMNLI, ModelOptions
-from looped_transformer.domains.mnli.policies.loop_diagnostics import (
+from looped_transformer.domains.mnli.evaluation.evaluation import EvaluationOptions
+from looped_transformer.domains.mnli.evaluation.loop_diagnostics import (
     LoopDiagnosticsOptions,
+)
+from looped_transformer.domains.mnli.evaluation.loop_diagnostics import (
     LoopDiagnosticsPolicy,
 )
-from looped_transformer.domains.mnli.tokenizer import MNLITokenizer
+from looped_transformer.domains.mnli.model import LoopedMNLI
+from looped_transformer.domains.mnli.model import ModelOptions
+from looped_transformer.domains.mnli.services.data_provider import MNLIDataOptions
+from looped_transformer.domains.mnli.services.data_provider import MNLIDataProvider
+from looped_transformer.domains.mnli.services.tokenizer import MNLITokenizer
+from looped_transformer.domains.mnli.training.collator import MNLICollator
+from looped_transformer.domains.mnli.types.batch import MNLIBatch
+from looped_transformer.domains.mnli.types.model import ModelForwardOutput
 
 
 def _model_factory(

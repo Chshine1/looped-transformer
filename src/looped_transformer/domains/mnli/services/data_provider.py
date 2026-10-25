@@ -1,5 +1,3 @@
-"""MNLI dataset access."""
-
 import json
 import random
 import shutil
@@ -19,7 +17,7 @@ from looped_transformer.core.config.base import (
     OptionsModel,
     PositiveInt,
 )
-from looped_transformer.domains.mnli.batch import MNLIBatch
+from looped_transformer.domains.mnli.types.batch import MNLIBatch
 
 
 class MNLIDataOptions(OptionsModel):

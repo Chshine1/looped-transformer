@@ -1,27 +1,26 @@
-"""MNLI pair tokenizer."""
-
 import os
 from collections.abc import Sequence
 from typing import cast
 
-from pydantic import Field
 from transformers import TensorType
 
 # noinspection protected-member
 from transformers.models.bert.tokenization_bert import BertTokenizerFast
 from transformers.utils import PaddingStrategy
 
-from looped_transformer.core.abstractions.tokenizer import TokenizeResult, TokenizerInfo
 from looped_transformer.core.config.base import NonEmptyString, OptionsModel
 from looped_transformer.core.config.sequence import SequenceOptions
-
-
-class TokenizerSourceOptions(OptionsModel):
-    pretrained_model: NonEmptyString = "bert-base-uncased"
+from looped_transformer.domains.mnli.types.tokenizer import (
+    TokenizerInfo,
+    TokenizeResult,
+)
 
 
 class TokenizerOptions(OptionsModel):
-    source: TokenizerSourceOptions = Field(default_factory=TokenizerSourceOptions)
+    class _TokenizerSourceOptions(OptionsModel):
+        pretrained_model: NonEmptyString
+
+    source: _TokenizerSourceOptions
     sequence: SequenceOptions
 
 

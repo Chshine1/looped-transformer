@@ -1,17 +1,17 @@
-"""Checkpoint persistence infrastructure."""
-
 import random
 from pathlib import Path
 
 import torch
 
+from looped_transformer.core.abstractions.checkpoint_components import (
+    CheckpointComponents,
+)
 from looped_transformer.core.abstractions.training import TrainingState
 from looped_transformer.core.artifacts import (
     ArtifactSpec,
     get_run_output_dir,
     write_manifest,
 )
-from looped_transformer.core.checkpointing.contracts import CheckpointComponents
 from looped_transformer.core.config.base import ConfigPath, OptionsModel
 from looped_transformer.core.config.runtime import DeviceOptions
 

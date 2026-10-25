@@ -1,13 +1,13 @@
-"""Checkpoint restoration infrastructure."""
-
 import random
 from pathlib import Path
 
 import torch
 from torch import nn
 
+from looped_transformer.core.abstractions.checkpoint_components import (
+    CheckpointComponents,
+)
 from looped_transformer.core.abstractions.training import TrainingState
-from looped_transformer.core.checkpointing.contracts import CheckpointComponents
 from looped_transformer.core.config.runtime import DeviceOptions
 
 

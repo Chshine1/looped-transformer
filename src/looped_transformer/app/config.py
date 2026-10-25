@@ -1,5 +1,3 @@
-"""Application configuration loading and root options."""
-
 from pathlib import Path
 from typing import Any, cast
 
@@ -11,7 +9,7 @@ from looped_transformer.core.config.base import OptionsModel
 from looped_transformer.core.config.runtime import RuntimeOptions
 from looped_transformer.core.training.stage import TrainingOptions
 from looped_transformer.domains.mnli.model import ModelOptions
-from looped_transformer.domains.mnli.tokenizer import TokenizerOptions
+from looped_transformer.domains.mnli.services.tokenizer import TokenizerOptions
 
 
 class AppOptions(OptionsModel):

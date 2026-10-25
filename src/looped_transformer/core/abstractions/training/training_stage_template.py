@@ -1,14 +1,12 @@
-"""Resolved training-stage data and factory contracts."""
-
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 import torch
 from torch import Tensor, nn
 
-from looped_transformer.core.abstractions.model import TypedModule
 from looped_transformer.core.abstractions.training.data_provider import IDataProvider
-from looped_transformer.core.training.stage import CommonStageOptions
+from looped_transformer.core.abstractions.typed_module import TypedModule
+from looped_transformer.core.training.stage import StageOptions
 
 type OptimizerFactory = Callable[
     [Iterable[tuple[str, nn.parameter.Parameter]]], torch.optim.Optimizer
@@ -21,7 +19,7 @@ type SchedulerFactory = Callable[
 @dataclass
 class TrainingStage[TBatch, TModelOutput, TLossInput]:
     id: str
-    stage_options: CommonStageOptions
+    stage_options: StageOptions
     data_provider: IDataProvider[TBatch]
     loss: TypedModule[TModelOutput, TLossInput, Tensor]
     optimizer_factory: OptimizerFactory

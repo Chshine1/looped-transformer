@@ -1,5 +1,3 @@
-"""Serializable state of a training run."""
-
 from dataclasses import dataclass
 
 

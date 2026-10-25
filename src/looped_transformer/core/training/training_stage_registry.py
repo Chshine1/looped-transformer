@@ -2,13 +2,13 @@ from collections.abc import Callable
 
 from torch import Tensor
 
-from looped_transformer.core.abstractions.model import TypedModule
 from looped_transformer.core.abstractions.training import IDataProvider
 from looped_transformer.core.abstractions.training.training_stage_template import (
     OptimizerFactory,
     SchedulerFactory,
     TrainingStage,
 )
+from looped_transformer.core.abstractions.typed_module import TypedModule
 from looped_transformer.core.training.stage import StageTemplate, TrainingOptions
 
 
@@ -48,17 +48,17 @@ class TrainingStageRegistry[TBatch, TModelOutput, TLossInput]:
 
             return get_stage
 
-        for stage_id, raw_dict in self._options.stage_templates.items():
+        for template_stage_id, raw_dict in self._options.stage_templates.items():
             if template.type != raw_dict.get("type"):
                 continue
             template_values = {
                 key: value for key, value in raw_dict.items() if key != "type"
             }
-            validated = template.model_validate(template_values)
-            data_provider = data_provider_factory(validated)
+            validated_template = template.model_validate(template_values)
+            template_data_provider = data_provider_factory(validated_template)
 
-            self._registered_factories[stage_id] = create_factory(
-                stage_id, validated, data_provider
+            self._registered_factories[template_stage_id] = create_factory(
+                template_stage_id, validated_template, template_data_provider
             )
 
     def resolve(self, stage_id: str) -> TrainingStage[TBatch, TModelOutput, TLossInput]:

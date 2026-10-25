@@ -1,5 +1,3 @@
-"""MNLI loop-supervision losses."""
-
 from typing import Annotated, Literal, Self
 
 import torch
@@ -7,13 +5,14 @@ from pydantic import BeforeValidator, Field, model_validator
 from torch import Tensor, nn
 from torch.nn import functional
 
-from looped_transformer.core.abstractions.model import IModule, ModelTrainOutput
+from looped_transformer.core.abstractions.typed_module import IModule
 from looped_transformer.core.config.base import (
     ExclusiveProbability,
     NonNegativeFloat,
     OptionsModel,
     PositiveInt,
 )
+from looped_transformer.domains.mnli.types.model import ModelForwardOutput
 
 
 class AnchoredSampledLoopLossOptions(OptionsModel):
@@ -39,21 +38,8 @@ class AnchoredSampledLoopLossOptions(OptionsModel):
         return self
 
 
-def _cross_entropy_by_time(
-    output: ModelTrainOutput, labels: Tensor, label_smoothing: float
-) -> Tensor:
-    logits = output["timed_logits"].float()
-    iterations, _, classes = logits.shape
-    return functional.cross_entropy(
-        logits.reshape(-1, classes),
-        labels.unsqueeze(0).expand(iterations, -1).reshape(-1),
-        reduction="none",
-        label_smoothing=label_smoothing,
-    ).reshape(iterations, -1)
-
-
 class AnchoredSampledLoopCrossEntropyLoss(
-    nn.Module, IModule[ModelTrainOutput, Tensor, Tensor]
+    nn.Module, IModule[ModelForwardOutput, Tensor, Tensor]
 ):
     def __init__(
         self,
@@ -67,8 +53,8 @@ class AnchoredSampledLoopCrossEntropyLoss(
         self._label_smoothing = options.label_smoothing
         self._time_rope_regularization_scale = options.time_rope_regularization_scale
 
-    def forward(self, output: ModelTrainOutput, labels: Tensor) -> Tensor:
-        cross_entropy = _cross_entropy_by_time(
+    def forward(self, output: ModelForwardOutput, labels: Tensor) -> Tensor:
+        cross_entropy = self._cross_entropy_by_time(
             output, labels, label_smoothing=self._label_smoothing
         )
         if max(self._sampled_loops) >= cross_entropy.size(0) - 1:
@@ -92,3 +78,16 @@ class AnchoredSampledLoopCrossEntropyLoss(
         return task_loss + (
             self._time_rope_regularization_scale * output["time_rope_regularization"]
         )
+
+    @staticmethod
+    def _cross_entropy_by_time(
+        output: ModelForwardOutput, labels: Tensor, label_smoothing: float
+    ) -> Tensor:
+        logits = output["timed_logits"].float()
+        iterations, _, classes = logits.shape
+        return functional.cross_entropy(
+            logits.reshape(-1, classes),
+            labels.unsqueeze(0).expand(iterations, -1).reshape(-1),
+            reduction="none",
+            label_smoothing=label_smoothing,
+        ).reshape(iterations, -1)

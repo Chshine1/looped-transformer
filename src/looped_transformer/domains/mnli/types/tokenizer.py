@@ -1,5 +1,3 @@
-"""Domain-independent tokenizer data transfer objects."""
-
 from dataclasses import dataclass
 
 from torch import Tensor

@@ -1,5 +1,3 @@
-"""MNLI batch data transfer object."""
-
 from dataclasses import dataclass
 
 

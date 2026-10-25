@@ -1,5 +1,3 @@
-"""Teacher model for the MNLI halting controller."""
-
 from typing import cast
 
 from torch import Tensor, nn

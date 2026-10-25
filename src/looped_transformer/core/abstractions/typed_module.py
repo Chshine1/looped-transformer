@@ -1,10 +1,8 @@
-"""Domain-independent typed module contracts."""
+from typing import Protocol, Self
 
-from typing import Literal, NotRequired, Protocol, Self, TypedDict
-
-from torch import Tensor, nn
-from torch import device as TorchDevice
-from torch import dtype as TorchDType
+from torch import device as _torch_device
+from torch import dtype as _torch_dtype
+from torch import nn
 
 
 class IModule[*TIn, TOut](Protocol):
@@ -28,19 +26,9 @@ class TypedModule[*TIn, TOut]:
 
     def to(
         self,
-        device: TorchDevice | int | str | None = None,
-        dtype: TorchDType | None = None,
+        device: _torch_device | int | str | None = None,
+        dtype: _torch_dtype | None = None,
         non_blocking: bool = False,
     ) -> Self:
         self._torch.to(device=device, dtype=dtype, non_blocking=non_blocking)
         return self
-
-
-class ModelTrainOutput(TypedDict):
-    mode: Literal["train"]
-    timed_logits: Tensor
-    halt_probabilities: Tensor
-    time_rope_regularization: NotRequired[Tensor]
-
-
-ModelForwardOutput = ModelTrainOutput

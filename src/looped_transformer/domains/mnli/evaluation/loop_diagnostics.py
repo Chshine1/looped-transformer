@@ -1,5 +1,3 @@
-"""MNLI evaluation diagnostics."""
-
 from dataclasses import dataclass
 from typing import Any, override
 
@@ -7,7 +5,7 @@ import torch
 from torch import Tensor
 from torch.nn import functional
 
-from looped_transformer.core.abstractions.model import ModelForwardOutput, TypedModule
+from looped_transformer.core.abstractions.typed_module import TypedModule
 from looped_transformer.core.config.base import (
     ExclusiveProbability,
     NonNegativeInt,
@@ -18,8 +16,9 @@ from looped_transformer.core.config.runtime import DeviceOptions
 from looped_transformer.core.evaluation import EvaluationPolicy
 from looped_transformer.core.logging import StructuralLogger
 from looped_transformer.core.nn.options import LoopOptions
-from looped_transformer.domains.mnli.batch import MNLIBatch
-from looped_transformer.domains.mnli.labels import get_logic_relation
+from looped_transformer.domains.mnli.types.batch import MNLIBatch
+from looped_transformer.domains.mnli.types.logic_relation import LogicRelation
+from looped_transformer.domains.mnli.types.model import ModelForwardOutput
 
 
 class LoopDiagnosticsOptions(OptionsModel):
@@ -231,7 +230,7 @@ class LoopDiagnosticsPolicy(
         loop_count, sample_count, class_count = timed_logits.shape
 
         labels = torch.tensor(
-            [get_logic_relation(label).value for label in batch.labels],
+            [LogicRelation.from_string(label).value for label in batch.labels],
             dtype=torch.long,
             device=timed_logits.device,
         )

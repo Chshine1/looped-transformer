@@ -1,5 +1,3 @@
-"""Shared output types for adaptive halting modules."""
-
 from typing import TypedDict
 
 from torch import Tensor

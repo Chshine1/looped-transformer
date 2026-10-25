@@ -1,14 +1,12 @@
-"""Adapter from MNLI batches to model tensors."""
-
 from typing import override
 
 import torch
 from torch import Tensor
 
 from looped_transformer.core.abstractions.training import ModelTrainingCollator
-from looped_transformer.domains.mnli.batch import MNLIBatch
-from looped_transformer.domains.mnli.labels import get_logic_relation
-from looped_transformer.domains.mnli.tokenizer import MNLITokenizer
+from looped_transformer.domains.mnli.services.tokenizer import MNLITokenizer
+from looped_transformer.domains.mnli.types.batch import MNLIBatch
+from looped_transformer.domains.mnli.types.logic_relation import LogicRelation
 
 
 class MNLICollator(ModelTrainingCollator[MNLIBatch, Tensor, Tensor, Tensor]):
@@ -23,7 +21,7 @@ class MNLICollator(ModelTrainingCollator[MNLIBatch, Tensor, Tensor, Tensor]):
         input_ids = encoding.input_ids.to(device)
         attention_mask = encoding.attention_mask.to(device)
         label_tensor = torch.tensor(
-            [get_logic_relation(label).value for label in batch.labels],
+            [LogicRelation.from_string(label).value for label in batch.labels],
             dtype=torch.long,
             device=device,
         )

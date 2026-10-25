@@ -11,7 +11,7 @@ model:
 training:
   stage_templates:
     backbone_warmup:
-      common:
+      options:
         epochs: 12
-      loss:
+      loss_options:
         label_smoothing: 0.00

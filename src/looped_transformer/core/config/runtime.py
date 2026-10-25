@@ -1,16 +1,15 @@
-"""Domain-independent runtime and precision options."""
-
 from contextlib import nullcontext
 
 import torch
 from torch import autocast
 
 from looped_transformer.core.config.base import OptionsModel
-from looped_transformer.core.torch.types import TorchDevice, TorchDType
 from looped_transformer.core.training.config import (
     ReproducibilityOptions,
     TrainingRuntimeOptions,
 )
+from looped_transformer.utils.pydantic import TorchDType
+from looped_transformer.utils.pydantic import TorchDevice
 
 
 class DeviceOptions(OptionsModel):

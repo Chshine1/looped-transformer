@@ -1,9 +1,7 @@
-"""Configuration contracts for domain-defined training stages."""
-
 import re
 from typing import ClassVar
 
-from pydantic import Field, JsonValue, field_validator
+from pydantic import JsonValue, field_validator
 
 from looped_transformer.core.config.base import (
     NonEmptyString,
@@ -13,7 +11,7 @@ from looped_transformer.core.config.base import (
 )
 
 
-class CommonStageOptions(OptionsModel):
+class StageOptions(OptionsModel):
     epochs: PositiveInt
     frozen_patterns: str = r"(?!)"
     evaluation_patterns: str = r"(?!)"
@@ -31,7 +29,7 @@ class CommonStageOptions(OptionsModel):
 
 class StageTemplate(OptionsModel):
     type: ClassVar[str]
-    options: CommonStageOptions = Field(validation_alias="common")
+    options: StageOptions
 
 
 class TrainingOptions(OptionsModel):
