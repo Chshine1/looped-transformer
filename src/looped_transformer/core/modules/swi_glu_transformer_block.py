@@ -80,7 +80,7 @@ class SwiGLUTransformerBlock(nn.Module):
         ffn: Tensor = self._normalization2(hidden_state)
 
         gate = functional.silu(self._gate_transform(ffn))
-        up = self._up_transform(hidden_state)
+        up = self._up_transform(ffn)
         ffn = self._down_transform(self._swi_glu_dropout(gate * up))
 
         return hidden_state + self._batch_dropout2(
