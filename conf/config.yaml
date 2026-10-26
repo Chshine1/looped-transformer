@@ -1,4 +1,4 @@
 defaults:
   - base
-  - no-overfit-prevention
+  - stage: backbone
   - _self_

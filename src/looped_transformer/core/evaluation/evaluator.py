@@ -34,6 +34,7 @@ class Evaluator[TBatch, *TModelInput, TModelOutput, TLossInput]:
 
         self._device_options = device_options
         self._precision_options = precision_options
+        self._training_modes: list[tuple[torch.nn.Module, bool]] | None = None
 
         try:
             checkpoint_loader.load(checkpoint_options.path)
@@ -41,34 +42,64 @@ class Evaluator[TBatch, *TModelInput, TModelOutput, TLossInput]:
         finally:
             checkpoint_loader.dispose()
 
-    def evaluate(self) -> None:
+    def open(self) -> None:
+        """Prepare the model and policy for one or more batch evaluations."""
+        if self._training_modes is not None:
+            raise RuntimeError("The evaluator is already open")
+
         training_modes = [
             (module, module.training) for module in self._model.torch.modules()
         ]
+        self._training_modes = training_modes
         try:
-            self._policy.reset(self._model)
-            self._data_provider.reset_source(shuffle=False, seed=None)
             self._model.torch.eval()
+            self._policy.reset(self._model)
+        except BaseException:
+            self._training_modes = None
+            for module, training in training_modes:
+                module.train(training)
+            raise
+
+    def evaluate_batch(self, batch: TBatch) -> TModelOutput:
+        """Evaluate one caller-supplied batch in the current evaluator session."""
+        if self._training_modes is None:
+            raise RuntimeError("The evaluator must be opened before evaluating a batch")
+
+        i, _ = self._collator.collate_batch(
+            batch,
+            self._device_options.device,
+            self._precision_options.dtype,
+        )
+
+        with (
+            torch.no_grad(),
+            self._precision_options.autocast(self._device_options.device),
+        ):
+            output = self._model(*i)
+
+        self._policy.attend_batch(batch, output)
+        return output
+
+    def close(self) -> None:
+        """Close the current evaluator session and restore module training modes."""
+        training_modes, self._training_modes = self._training_modes, None
+        if training_modes is None:
+            return
+
+        try:
+            self._policy.close()
+        finally:
+            for module, training in training_modes:
+                module.train(training)
+
+    def evaluate(self) -> None:
+        self.open()
+        try:
+            self._data_provider.reset_source(shuffle=False, seed=None)
             while (batch := self._data_provider.fetch()) is not None:
-                i, _ = self._collator.collate_batch(
-                    batch,
-                    self._device_options.device,
-                    self._precision_options.dtype,
-                )
-
-                with (
-                    torch.no_grad(),
-                    self._precision_options.autocast(self._device_options.device),
-                ):
-                    output = self._model(*i)
-
-                self._policy.attend_batch(batch, output)
+                self.evaluate_batch(batch)
         finally:
             try:
                 self._data_provider.close()
             finally:
-                try:
-                    self._policy.close()
-                finally:
-                    for module, training in training_modes:
-                        module.train(training)
+                self.close()

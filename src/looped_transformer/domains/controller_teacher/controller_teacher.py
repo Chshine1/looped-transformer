@@ -8,12 +8,12 @@ from looped_transformer.core.config.base import (
     PositiveInt,
 )
 from looped_transformer.core.config.sequence import SequenceOptions
-from looped_transformer.core.nn.masked_mean_pooling import MaskedMeanPooling
-from looped_transformer.core.nn.multi_head_attention import (
+from looped_transformer.core.modules.masked_mean_pooling import MaskedMeanPooling
+from looped_transformer.core.modules.multi_head_attention import (
     AttentionOptions,
     RoPEMultiHeadAttention,
 )
-from looped_transformer.core.nn.positional_rope import (
+from looped_transformer.core.modules.positional_rope import (
     PositionalRoPECache,
     PositionalRoPEOptions,
 )

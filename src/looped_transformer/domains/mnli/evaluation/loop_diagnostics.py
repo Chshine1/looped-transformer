@@ -1,3 +1,4 @@
+from looped_transformer.domains.mnli.config.options import LoopOptions
 from dataclasses import dataclass
 from typing import Any, override
 
@@ -15,7 +16,6 @@ from looped_transformer.core.config.base import (
 from looped_transformer.core.config.runtime import DeviceOptions
 from looped_transformer.core.evaluation import EvaluationPolicy
 from looped_transformer.core.logging import StructuralLogger
-from looped_transformer.core.nn.options import LoopOptions
 from looped_transformer.domains.mnli.types.batch import MNLIBatch
 from looped_transformer.domains.mnli.types.logic_relation import LogicRelation
 from looped_transformer.domains.mnli.types.model import ModelForwardOutput

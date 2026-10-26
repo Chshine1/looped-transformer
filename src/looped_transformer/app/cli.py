@@ -7,28 +7,42 @@ from torch import Tensor
 from looped_transformer.app.config import load_options
 from looped_transformer.app.container import build_container, configure_evaluation
 from looped_transformer.core.abstractions.typed_module import TypedModule
+from looped_transformer.core.checkpointing import CheckpointLoader
 from looped_transformer.core.config.runtime import DeviceOptions, PrecisionOptions
 from looped_transformer.core.config.sequence import SequenceOptions
-from looped_transformer.core.evaluation.evaluator import EvaluationCheckpointOptions
+from looped_transformer.core.evaluation.evaluator import (
+    EvaluationCheckpointOptions,
+    Evaluator,
+)
 from looped_transformer.core.evaluation.evaluator_factory import EvaluatorFactory
 from looped_transformer.core.logging import StructuralLogger
 from looped_transformer.core.logging.structural_logger import EvaluationOutputOptions
-from looped_transformer.core.nn.options import LoopOptions
 from looped_transformer.core.training.model_trainer_factory import ModelTrainerFactory
 from looped_transformer.core.training.training_stage_registry import (
     TrainingStageRegistry,
 )
+from looped_transformer.domains.controller_teacher import (
+    ControllerTeacher,
+    ControllerTeacherBatch,
+    ControllerTeacherCollator,
+    ControllerTeacherCollectionPolicy,
+    ControllerTeacherDataProvider,
+    ControllerTeacherLossInput,
+    ControllerTeacherOptions,
+    ControllerTeacherStageTemplate,
+    register_controller_teacher_stage_template,
+)
+from looped_transformer.domains.mnli.config.options import LoopOptions
 from looped_transformer.domains.mnli.evaluation.evaluation import EvaluationOptions
 from looped_transformer.domains.mnli.evaluation.loop_diagnostics import (
     LoopDiagnosticsOptions,
-)
-from looped_transformer.domains.mnli.evaluation.loop_diagnostics import (
     LoopDiagnosticsPolicy,
 )
-from looped_transformer.domains.mnli.model import LoopedMNLI
-from looped_transformer.domains.mnli.model import ModelOptions
-from looped_transformer.domains.mnli.services.data_provider import MNLIDataOptions
-from looped_transformer.domains.mnli.services.data_provider import MNLIDataProvider
+from looped_transformer.domains.mnli.modules.model import LoopedMNLI, ModelOptions
+from looped_transformer.domains.mnli.services.data_provider import (
+    MNLIDataOptions,
+    MNLIDataProvider,
+)
 from looped_transformer.domains.mnli.services.tokenizer import MNLITokenizer
 from looped_transformer.domains.mnli.training.collator import MNLICollator
 from looped_transformer.domains.mnli.types.batch import MNLIBatch
@@ -70,11 +84,7 @@ def main() -> None:
     )
     subparser = parser.add_subparsers(dest="command", required=True)
 
-    train_parser = subparser.add_parser("train")
-    train_parser.add_argument(
-        "--resume",
-        metavar="CHECKPOINT",
-    )
+    subparser.add_parser("train")
 
     eval_parser = subparser.add_parser("eval")
     eval_parser.add_argument(
@@ -100,15 +110,78 @@ def main() -> None:
 
     if args.command == "train":
         trainer_factory = container[ModelTrainerFactory]
+        stage_type = options.training.stage.get("type")
+        if stage_type == "looped_mnli":
+            make_model = container.magic_partial(_model_factory)
+            make_collator = container.magic_partial(MNLICollator)
+            stage_registry = container[
+                TrainingStageRegistry[MNLIBatch, ModelForwardOutput, Tensor]
+            ]
+            trainer = trainer_factory.create(
+                make_model(), make_collator(), stage_registry.resolve()
+            )
+        elif stage_type == "controller_teacher":
+            device_options = container[DeviceOptions]
+            precision_options = container[PrecisionOptions]
+            sequence_options = container[SequenceOptions]
+            tokenizer = container[MNLITokenizer]
 
-        make_model = container.partial(_model_factory)
-        make_collator = container.partial(MNLICollator)
+            teacher_registry = TrainingStageRegistry[
+                ControllerTeacherBatch,
+                Tensor,
+                ControllerTeacherLossInput,
+            ](options.training)
 
-        trainer = trainer_factory.create(make_model(), make_collator())
-        stage_registry = container[
-            TrainingStageRegistry[MNLIBatch, ModelForwardOutput, Tensor]
-        ]
-        trainer.train(stage_registry.resolve("backbone_warmup"), args.resume)
+            def create_teacher_data_provider(
+                template: ControllerTeacherStageTemplate,
+            ) -> ControllerTeacherDataProvider:
+                source = MNLIDataProvider(template.data_options)
+                collector = ControllerTeacherCollectionPolicy(
+                    options.model.loop.max_iterations
+                )
+                backbone = _model_factory(
+                    options.model,
+                    sequence_options,
+                    tokenizer,
+                    device_options,
+                    precision_options,
+                )
+                evaluator = Evaluator(
+                    backbone,
+                    MNLICollator(tokenizer),
+                    collector,
+                    source,
+                    CheckpointLoader(device_options),
+                    device_options,
+                    precision_options,
+                    EvaluationCheckpointOptions(path=template.source_checkpoint),
+                )
+                return ControllerTeacherDataProvider(
+                    source,
+                    evaluator,
+                    collector,
+                    template.training_batch_size,
+                )
+
+            register_controller_teacher_stage_template(
+                teacher_registry,
+                create_teacher_data_provider,
+            )
+            teacher_options = container[ControllerTeacherOptions]
+            teacher = TypedModule(
+                ControllerTeacher(teacher_options, sequence_options).to(
+                    device=device_options.device,
+                    dtype=precision_options.dtype,
+                )
+            )
+            trainer = trainer_factory.create(
+                teacher,
+                ControllerTeacherCollator(),
+                teacher_registry.resolve(),
+            )
+        else:
+            raise ValueError(f"Unknown training stage type: {stage_type!r}")
+        trainer.train()
     if args.command == "eval":
         data_options = MNLIDataOptions(
             seed=42,
@@ -132,10 +205,12 @@ def main() -> None:
         evaluation_container = configure_evaluation(container, evaluation_options)
         evaluator_factory = evaluation_container[EvaluatorFactory]
 
-        make_model = evaluation_container.partial(_model_factory)
-        make_collator = evaluation_container.partial(MNLICollator)
-        make_policy = evaluation_container.partial(_loop_diagnostics_policy_factory)
-        make_data_provider = evaluation_container.partial(MNLIDataProvider)
+        make_model = evaluation_container.magic_partial(_model_factory)
+        make_collator = evaluation_container.magic_partial(MNLICollator)
+        make_policy = evaluation_container.magic_partial(
+            _loop_diagnostics_policy_factory
+        )
+        make_data_provider = evaluation_container.magic_partial(MNLIDataProvider)
 
         policy = make_policy()
         evaluator = evaluator_factory.create(

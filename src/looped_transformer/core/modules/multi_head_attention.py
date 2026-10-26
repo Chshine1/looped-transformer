@@ -1,5 +1,3 @@
-"""Reusable rotary multi-head attention."""
-
 import math
 
 import torch
@@ -12,8 +10,8 @@ from looped_transformer.core.config.base import (
     OptionsModel,
     PositiveInt,
 )
-from looped_transformer.core.nn.positional_rope import PositionalRoPECache
-from looped_transformer.core.nn.rotary import apply_rotary
+from looped_transformer.core.modules.positional_rope import PositionalRoPECache
+from looped_transformer.utils.torch.functional import apply_rotary
 
 
 class AttentionOptions(OptionsModel):

@@ -8,7 +8,7 @@ from looped_transformer.core.checkpointing.saver import CheckpointSavingOptions
 from looped_transformer.core.config.base import OptionsModel
 from looped_transformer.core.config.runtime import RuntimeOptions
 from looped_transformer.core.training.stage import TrainingOptions
-from looped_transformer.domains.mnli.model import ModelOptions
+from looped_transformer.domains.mnli.modules.model import ModelOptions
 from looped_transformer.domains.mnli.services.tokenizer import TokenizerOptions
 
 

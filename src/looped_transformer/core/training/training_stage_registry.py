@@ -15,9 +15,9 @@ from looped_transformer.core.training.stage import StageTemplate, TrainingOption
 class TrainingStageRegistry[TBatch, TModelOutput, TLossInput]:
     def __init__(self, options: TrainingOptions) -> None:
         self._options = options
-        self._registered_factories: dict[
-            str, Callable[[], TrainingStage[TBatch, TModelOutput, TLossInput]]
-        ] = {}
+        self._factory: Callable[
+            [], TrainingStage[TBatch, TModelOutput, TLossInput]
+        ] | None = None
 
     def register[TTemplate: StageTemplate](
         self,
@@ -31,35 +31,32 @@ class TrainingStageRegistry[TBatch, TModelOutput, TLossInput]:
             [TTemplate, IDataProvider[TBatch]], SchedulerFactory
         ],
     ) -> None:
-        def create_factory(
-            stage_id: str,
-            validated: TTemplate,
-            data_provider: IDataProvider[TBatch],
-        ) -> Callable[[], TrainingStage[TBatch, TModelOutput, TLossInput]]:
-            def get_stage() -> TrainingStage[TBatch, TModelOutput, TLossInput]:
-                return TrainingStage(
-                    id=stage_id,
-                    stage_options=validated.options,
-                    data_provider=data_provider,
-                    loss=loss_factory(validated),
-                    optimizer_factory=get_optimizer_factory(validated),
-                    scheduler_factory=get_scheduler_factory(validated, data_provider),
-                )
+        raw_stage = self._options.stage
+        if template.type != raw_stage.get("type"):
+            return
+        if self._factory is not None:
+            raise RuntimeError("The configured training stage is already registered")
 
-            return get_stage
+        template_values = {
+            key: value for key, value in raw_stage.items() if key != "type"
+        }
+        validated = template.model_validate(template_values)
+        data_provider = data_provider_factory(validated)
 
-        for template_stage_id, raw_dict in self._options.stage_templates.items():
-            if template.type != raw_dict.get("type"):
-                continue
-            template_values = {
-                key: value for key, value in raw_dict.items() if key != "type"
-            }
-            validated_template = template.model_validate(template_values)
-            template_data_provider = data_provider_factory(validated_template)
-
-            self._registered_factories[template_stage_id] = create_factory(
-                template_stage_id, validated_template, template_data_provider
+        def get_stage() -> TrainingStage[TBatch, TModelOutput, TLossInput]:
+            return TrainingStage(
+                id=validated.id,
+                stage_options=validated.options,
+                data_provider=data_provider,
+                loss=loss_factory(validated),
+                optimizer_factory=get_optimizer_factory(validated),
+                scheduler_factory=get_scheduler_factory(validated, data_provider),
             )
 
-    def resolve(self, stage_id: str) -> TrainingStage[TBatch, TModelOutput, TLossInput]:
-        return self._registered_factories[stage_id]()
+        self._factory = get_stage
+
+    def resolve(self) -> TrainingStage[TBatch, TModelOutput, TLossInput]:
+        if self._factory is None:
+            stage_type = self._options.stage.get("type")
+            raise KeyError(f"No training stage registered for type {stage_type!r}")
+        return self._factory()

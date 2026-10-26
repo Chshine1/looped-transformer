@@ -1,0 +1,34 @@
+# @package training.stage
+
+id: controller_teacher
+type: controller_teacher
+source_checkpoint: ???
+options:
+  epochs: 1
+  max_gradient_norm: 1.0
+  gradient_accumulation_steps: 5
+  save_every_epochs: 1
+data_options:
+  seed: 42
+  file_path: data/mnli_train.tsv
+  batch_size: 200
+  premise_column: sentence1
+  hypothesis_column: sentence2
+  label_column: gold_label
+  shuffle_cache_dir: data/shuffled
+  shuffle_chunk_size: 10000
+training_batch_size: 40
+loss_options:
+  incorrect_prediction_cost: 0.5
+optimizer_options:
+  learning_rates:
+    '.*': 0.0003
+  weight_decay: 0.01
+  beta1: 0.9
+  beta2: 0.999
+  epsilon: 0.00000001
+scheduler_options:
+  type: warmup_cosine
+  warmup_ratio: 0.06
+  warmup_start_factor: 0.1
+  minimum_learning_rate_factor: 0.1

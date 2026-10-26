@@ -1,56 +1,74 @@
+from looped_transformer.domains.mnli.config.options import LoopOptions
 import math
+from typing import Self
 
 import torch
 import torch.nn as nn
-from pydantic import Field, model_validator
+from pydantic import model_validator
 from torch import Tensor
 
 from looped_transformer.core.abstractions.typed_module import IModule
+from looped_transformer.core.config.base import ExclusiveProbability
+from looped_transformer.core.config.base import FiniteFloat
 from looped_transformer.core.config.base import OptionsModel, PositiveInt
 from looped_transformer.core.config.sequence import SequenceOptions
-from looped_transformer.core.nn.attention_residual import (
+from looped_transformer.core.modules.attention_residual import (
     AttentionResidualOptions,
     AttnRes,
 )
-from looped_transformer.core.nn.halting_cell import (
+from looped_transformer.core.modules.masked_mean_pooling import MaskedMeanPooling
+from looped_transformer.core.modules.positional_rope import (
+    PositionalRoPECache,
+    PositionalRoPEOptions,
+)
+from looped_transformer.core.modules.swi_glu_transformer_block import (
+    SwiGLUTransformerBlock,
+    TransformerBlockOptions,
+)
+from looped_transformer.core.modules.timed_rope import (
+    TimedMultiHeadRoPECache,
+    TimedRoPEOptions,
+)
+from looped_transformer.domains.mnli.modules.halting_cell import (
     HaltingCell,
     HaltingCellOptions,
     HaltingResult,
 )
-from looped_transformer.core.nn.masked_mean_pooling import MaskedMeanPooling
-from looped_transformer.core.nn.options import (
-    DropoutOptions,
-    HaltingOptions,
-    LoopOptions,
-    TransformerOptions,
-)
-from looped_transformer.core.nn.positional_rope import (
-    PositionalRoPECache,
-    PositionalRoPEOptions,
-)
-from looped_transformer.core.nn.rotary import apply_rotary
-from looped_transformer.core.nn.swi_glu_transformer_block import (
-    SwiGLUTransformerBlock,
-    TransformerBlockOptions,
-)
-from looped_transformer.core.nn.timed_rope import (
-    TimedMultiHeadRoPECache,
-    TimedRoPEOptions,
-)
 from looped_transformer.domains.mnli.types.model import ModelForwardOutput
 from looped_transformer.domains.mnli.types.tokenizer import TokenizerInfo
+from looped_transformer.utils.torch.functional import apply_rotary
 
 
 class ModelOptions(OptionsModel):
+    class _DropoutOptions(OptionsModel):
+        token: ExclusiveProbability = 0.0
+        embedding: ExclusiveProbability = 0.1
+        attention: ExclusiveProbability = 0.1
+        residual: ExclusiveProbability = 0.1
+        ffn: ExclusiveProbability = 0.1
+        classifier: ExclusiveProbability = 0.1
+        controller: ExclusiveProbability = 0.1
+        stochastic_depth: ExclusiveProbability = 0.0
+
+    class _TransformerOptions(OptionsModel):
+        swi_glu_ffn_dimension: PositiveInt
+        gelu_ffn_dimension: PositiveInt
+        attention_heads_count: PositiveInt
+
+    class _HaltingOptions(OptionsModel):
+        hazard_baseline_offset: FiniteFloat = -2.0
+        hazard_baseline_scale: FiniteFloat = -2.0
+        hazard_adjustment_scale: FiniteFloat = 0.9
+
     hidden_state_dimension: PositiveInt
     output_classes_count: PositiveInt
     loop: LoopOptions
-    dropout: DropoutOptions = Field(default_factory=DropoutOptions)
-    transformer: TransformerOptions
-    halting: HaltingOptions = Field(default_factory=HaltingOptions)
+    dropout: _DropoutOptions
+    transformer: _TransformerOptions
+    halting: _HaltingOptions
 
     @model_validator(mode="after")
-    def require_complete_attention_heads(self) -> "ModelOptions":
+    def require_complete_attention_heads(self) -> Self:
         heads = self.transformer.attention_heads_count
         if self.hidden_state_dimension % heads:
             raise ValueError(

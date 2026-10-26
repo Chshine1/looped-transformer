@@ -1,5 +1,3 @@
-"""Cached loop-time rotary embeddings."""
-
 import torch
 from torch import Tensor, nn
 

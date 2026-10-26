@@ -3,7 +3,7 @@ from lagom.interfaces import ReadableContainer
 from torch import Tensor
 
 from looped_transformer.app.config import AppOptions
-from looped_transformer.core.artifacts import ArtifactSpec
+from looped_transformer.core.artifacts import ArtifactSpec, get_file_fingerprint
 from looped_transformer.core.checkpointing import CheckpointLoader, CheckpointSaver
 from looped_transformer.core.checkpointing.saver import CheckpointSavingOptions
 from looped_transformer.core.config.runtime import DeviceOptions, PrecisionOptions
@@ -12,26 +12,29 @@ from looped_transformer.core.evaluation.evaluator import EvaluationCheckpointOpt
 from looped_transformer.core.evaluation.evaluator_factory import EvaluatorFactory
 from looped_transformer.core.logging import StructuralLogger
 from looped_transformer.core.logging.structural_logger import EvaluationOutputOptions
-from looped_transformer.core.nn.options import LoopOptions
 from looped_transformer.core.training.config import (
     ReproducibilityOptions,
     TrainingRuntimeOptions,
 )
 from looped_transformer.core.training.model_trainer_factory import ModelTrainerFactory
+from looped_transformer.core.training.stage import TrainingOptions
 from looped_transformer.core.training.training_stage_registry import (
     TrainingStageRegistry,
 )
 from looped_transformer.domains.controller_teacher.controller_teacher import (
     ControllerTeacherOptions,
 )
+from looped_transformer.domains.mnli.config.options import LoopOptions
 from looped_transformer.domains.mnli.evaluation.evaluation import EvaluationOptions
 from looped_transformer.domains.mnli.evaluation.loop_diagnostics import (
     LoopDiagnosticsOptions,
 )
-from looped_transformer.domains.mnli.model import ModelOptions
+from looped_transformer.domains.mnli.modules.model import ModelOptions
 from looped_transformer.domains.mnli.services.data_provider import MNLIDataOptions
-from looped_transformer.domains.mnli.services.tokenizer import MNLITokenizer
-from looped_transformer.domains.mnli.services.tokenizer import TokenizerOptions
+from looped_transformer.domains.mnli.services.tokenizer import (
+    MNLITokenizer,
+    TokenizerOptions,
+)
 from looped_transformer.domains.mnli.training.stage import (
     register_looped_mnli_stage_template,
 )
@@ -43,12 +46,14 @@ def build_container(options: AppOptions) -> Container:
     container = Container()
     container[AppOptions] = options
     container[ArtifactSpec] = ArtifactSpec(
-        format="looped-transformer-training-v1",
+        format="looped-transformer-training-v2",
         values={
             "runtime": options.runtime,
             "model": options.model,
             "tokenizer": options.tokenizer,
-            "training": options.training,
+            "stage": options.training.stage,
+            "resume_from": _checkpoint_reference(options.training.resume_from),
+            "stage_source": _stage_source_reference(options.training.stage),
         },
     )
     container[CheckpointSavingOptions] = options.checkpoint
@@ -66,6 +71,7 @@ def build_container(options: AppOptions) -> Container:
     container[PrecisionOptions] = options.runtime.precision
     container[ReproducibilityOptions] = options.runtime.reproducibility
     container[TrainingRuntimeOptions] = options.runtime.training
+    container[TrainingOptions] = options.training
     stage_registry = TrainingStageRegistry[MNLIBatch, ModelForwardOutput, Tensor](
         options.training
     )
@@ -93,3 +99,17 @@ def configure_evaluation(container: Container, options: EvaluationOptions) -> Co
 
 def _build_tokenizer(container: ReadableContainer) -> MNLITokenizer:
     return MNLITokenizer(container[TokenizerOptions])
+
+
+def _checkpoint_reference(path) -> dict | None:
+    if path is None:
+        return None
+    return {
+        "path": str(path),
+        "fingerprint": get_file_fingerprint(path),
+    }
+
+
+def _stage_source_reference(stage: dict) -> dict | None:
+    source = stage.get("source_checkpoint")
+    return _checkpoint_reference(source)

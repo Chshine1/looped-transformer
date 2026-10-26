@@ -1,182 +1,85 @@
-from typing import cast, override
+from dataclasses import dataclass
+from typing import override
 
 import torch
 from torch import Tensor, nn
 from torch.nn import functional
-from torch.utils.hooks import RemovableHandle
 
-from looped_transformer.core.abstractions.typed_module import TypedModule
-from looped_transformer.core.config.base import (
-    NonNegativeFloat,
-    OptionsModel,
-    PositiveFloat,
-    PositiveInt,
+from looped_transformer.core.abstractions.training import ModelTrainingCollator
+from looped_transformer.domains.controller_teacher.batch import (
+    ControllerTeacherBatch,
 )
-from looped_transformer.core.config.runtime import DeviceOptions, PrecisionOptions
-from looped_transformer.core.config.sequence import SequenceOptions
-from looped_transformer.core.evaluation import EvaluationPolicy
-from looped_transformer.core.nn.options import LoopOptions
-from looped_transformer.domains.controller_teacher.controller_teacher import (
-    ControllerTeacher,
-)
-from looped_transformer.domains.controller_teacher.controller_teacher import (
-    ControllerTeacherOptions,
-)
-from looped_transformer.domains.mnli.model import LoopedMNLI
-from looped_transformer.domains.mnli.types.batch import MNLIBatch
 from looped_transformer.domains.mnli.types.logic_relation import LogicRelation
-from looped_transformer.domains.mnli.types.model import ModelForwardOutput
 
 
-class ControllerTeacherTrainingOptions(OptionsModel):
-    epochs: PositiveInt
-    learning_rate: PositiveFloat
-    weight_decay: NonNegativeFloat
-    max_gradient_norm: PositiveFloat
+@dataclass(frozen=True, slots=True)
+class ControllerTeacherLossInput:
+    timed_logits: Tensor
+    labels: Tensor
 
 
-class ControllerTeacherTrainingPolicy(
-    EvaluationPolicy[MNLIBatch, Tensor, Tensor, ModelForwardOutput]
+class ControllerTeacherCollator(
+    ModelTrainingCollator[
+        ControllerTeacherBatch,
+        Tensor,
+        Tensor,
+        ControllerTeacherLossInput,
+    ]
 ):
-    class _Loss(nn.Module):
-        # noinspection method-may-be-static
-        def forward(
-            self,
-            loop_logits: Tensor,
-            model_output: ModelForwardOutput,
-            labels: Tensor,
-        ) -> Tensor:
-            logits = model_output["timed_logits"].detach().float()
-            loop_count, _, classes = logits.shape
+    """Move one collected backbone trajectory onto the teacher's device."""
 
-            cross_entropy = functional.cross_entropy(
-                logits.reshape(-1, classes),
-                labels.repeat(loop_count),
-                reduction="none",
-            ).reshape(loop_count, -1)
-            incorrect = logits.argmax(dim=-1).ne(labels).float()
-            loop_probabilities = torch.softmax(loop_logits.float(), dim=0)
-
-            costs = cross_entropy + 0.5 * incorrect
-            return (loop_probabilities * costs).sum(dim=0).mean()
-
-    def __init__(
+    @override
+    def collate_batch(
         self,
-        model_options: ControllerTeacherOptions,
-        loop_options: LoopOptions,
-        sequence_options: SequenceOptions,
-        device_options: DeviceOptions,
-        precision_options: PrecisionOptions,
-        options: ControllerTeacherTrainingOptions,
-    ) -> None:
-        self._device_options = device_options
-        self._precision_options = precision_options
-        self._max_gradient_norm = options.max_gradient_norm
-
-        self._model = ControllerTeacher(model_options, sequence_options).to(
-            device_options.device
-        )
-        self._loss = self._Loss()
-        self._optimizer = torch.optim.AdamW(
-            self._model.parameters(),
-            lr=options.learning_rate,
-            weight_decay=options.weight_decay,
-        )
-        self._scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            self._optimizer,
-            T_max=options.epochs,
-        )
-        self._scaler = torch.amp.GradScaler(
-            device_options.device.type,
-            enabled=precision_options.amp_enabled
-            and precision_options.amp_dtype == torch.float16,
-        )
-
-        self._batch_aligned_states: list[Tensor | None] = [
-            None
-        ] * loop_options.max_iterations
-        self._padding_mask: Tensor | None = None
-        self._hook_handles: list[RemovableHandle] = []
-        self._epoch_loss: Tensor | None = None
-        self._epoch_batches = 0
-        self._global_step = 0
-
-    @override
-    def reset(self, model: TypedModule) -> None:
-        self.close()
-        self._model.train()
-        self._epoch_loss = None
-        self._epoch_batches = 0
-
-        def capture_inputs(_: nn.Module, input_args: tuple[Tensor, Tensor]) -> None:
-            self._batch_aligned_states[:] = [None] * len(self._batch_aligned_states)
-            self._padding_mask = input_args[1].detach()
-
-        def capture_aligned_state(
-            _: nn.Module,
-            input_args: tuple[int, Tensor],
-            output: Tensor,
-        ) -> None:
-            rotation, _ignored_state = input_args
-            self._batch_aligned_states[-rotation - 1] = output.detach()
-
-        handles: list[RemovableHandle] = []
-        try:
-            handles.append(model.torch.register_forward_pre_hook(capture_inputs))
-            # noinspection protected-member
-            handles.append(
-                cast(LoopedMNLI, model.torch)._alignment_rotation.register_forward_hook(
-                    capture_aligned_state
-                )
-            )
-        except BaseException:
-            for handle in handles:
-                handle.remove()
-            raise
-        self._hook_handles.extend(handles)
-
-    @override
-    def attend_batch(self, batch: MNLIBatch, output: ModelForwardOutput) -> None:
-        padding_mask = self._padding_mask
-        states = self._batch_aligned_states
-        if padding_mask is None or any(state is None for state in states):
-            raise RuntimeError(
-                "The backbone did not produce a complete loop trajectory"
-            )
-
-        aligned_hidden_states = torch.stack(
-            [state for state in states if state is not None], dim=0
-        )
+        batch: ControllerTeacherBatch,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> tuple[tuple[Tensor, Tensor], ControllerTeacherLossInput]:
+        hidden_states = batch.timed_hidden_states.to(device=device, dtype=dtype)
+        padding_mask = batch.padding_mask.to(device=device)
+        timed_logits = batch.timed_logits.to(device=device, dtype=torch.float32)
         labels = torch.tensor(
-            [LogicRelation.from_string(label).value for label in batch.labels],
+            [LogicRelation.from_string(label).value for label in batch.mnli.labels],
             dtype=torch.long,
-            device=self._device_options.device,
+            device=device,
+        )
+        return (hidden_states, padding_mask), ControllerTeacherLossInput(
+            timed_logits=timed_logits,
+            labels=labels,
         )
 
-        self._optimizer.zero_grad(set_to_none=True)
-        with self._precision_options.autocast(self._device_options.device):
-            loop_logits = self._model(aligned_hidden_states, padding_mask)
-            loss = self._loss(loop_logits, output, labels)
 
-        self._scaler.scale(loss).backward()
-        self._scaler.unscale_(self._optimizer)
-        torch.nn.utils.clip_grad_norm_(
-            self._model.parameters(), self._max_gradient_norm
-        )
-        self._scaler.step(self._optimizer)
-        self._scaler.update()
+class ControllerTeacherLoss(nn.Module):
+    """Expected frozen-backbone classification cost under teacher loop choices."""
 
-        detached_loss = loss.detach()
-        self._epoch_loss = (
-            detached_loss
-            if self._epoch_loss is None
-            else self._epoch_loss + detached_loss
-        )
-        self._epoch_batches += 1
-        self._global_step += 1
+    def __init__(self, incorrect_prediction_cost: float = 0.5) -> None:
+        super().__init__()
+        if incorrect_prediction_cost < 0:
+            raise ValueError("incorrect_prediction_cost must be non-negative")
+        self._incorrect_prediction_cost = incorrect_prediction_cost
 
-    @override
-    def close(self) -> None:
-        for handle in self._hook_handles:
-            handle.remove()
-        self._hook_handles.clear()
+    def forward(
+        self,
+        loop_logits: Tensor,
+        targets: ControllerTeacherLossInput,
+    ) -> Tensor:
+        logits = targets.timed_logits.float()
+        if logits.ndim != 3:
+            raise ValueError(
+                "timed_logits must have shape (loops, samples, classes)"
+            )
+        if loop_logits.shape != logits.shape[:2]:
+            raise ValueError(
+                "loop_logits must have shape (loops, samples) matching timed_logits"
+            )
+
+        loop_count, _, classes = logits.shape
+        cross_entropy = functional.cross_entropy(
+            logits.reshape(-1, classes),
+            targets.labels.repeat(loop_count),
+            reduction="none",
+        ).reshape(loop_count, -1)
+        incorrect = logits.argmax(dim=-1).ne(targets.labels).float()
+        costs = cross_entropy + self._incorrect_prediction_cost * incorrect
+        loop_probabilities = torch.softmax(loop_logits.float(), dim=0)
+        return (loop_probabilities * costs).sum(dim=0).mean()

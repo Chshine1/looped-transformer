@@ -1,5 +1,3 @@
-"""Shared sequence-shape options."""
-
 from looped_transformer.core.config.base import OptionsModel, PositiveInt
 
 

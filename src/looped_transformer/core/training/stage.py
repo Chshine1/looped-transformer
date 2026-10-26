@@ -4,6 +4,7 @@ from typing import ClassVar
 from pydantic import JsonValue, field_validator
 
 from looped_transformer.core.config.base import (
+    ConfigPath,
     NonEmptyString,
     OptionsModel,
     PositiveFloat,
@@ -29,9 +30,10 @@ class StageOptions(OptionsModel):
 
 class StageTemplate(OptionsModel):
     type: ClassVar[str]
+    id: NonEmptyString
     options: StageOptions
 
 
 class TrainingOptions(OptionsModel):
-    stage: NonEmptyString
-    stage_templates: dict[str, dict[str, JsonValue]]
+    stage: dict[str, JsonValue]
+    resume_from: ConfigPath | None = None

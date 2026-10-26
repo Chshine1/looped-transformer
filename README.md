@@ -40,6 +40,47 @@ pixi run typecheck
 pixi run train
 ```
 
+Training is configuration-driven and produces one artifact for one stage. The
+default stage retrains the backbone for six epochs in FP32 with batch size 200.
+To continue an interrupted run, put the checkpoint in the composed
+configuration rather than passing state to the trainer:
+
+```bash
+pixi run looped-transformer --config-dir conf \
+  --override training.resume_from=/absolute/path/to/checkpoint-epoch-2.pt \
+  train
+```
+
+The artifact identity includes the resolved stage configuration, the resume
+checkpoint fingerprint, and (for a controller teacher) the backbone source
+checkpoint fingerprint. A controller teacher run can therefore be selected
+with only the differing Hydra overrides:
+
+```bash
+pixi run looped-transformer --config-dir conf \
+  --override stage=controller_teacher \
+  --override training.stage.source_checkpoint=/absolute/path/to/backbone.pt \
+  train
+```
+
+On a 24 GiB RTX 4090, controller collection uses backbone batches of 200 but
+slices each collected trajectory into teacher microbatches of 40. Five-way
+gradient accumulation retains an effective batch size of 200. For six loops,
+sequence length 128, and hidden dimension 256, one collected FP32 trajectory is
+about 150 MiB; a teacher microbatch is about 30 MiB before activations. The
+default one-epoch teacher schedule performs about 1,964 frozen-backbone forwards,
+9,818 teacher microsteps, and 1,964 optimizer steps on the full MNLI training
+set. In practice, budget roughly one to two backbone-training epochs per teacher
+run; the three teachers add approximately 50--100% to the six-epoch backbone
+run. Actual wall time depends strongly on tokenization and CUDA kernel throughput.
+
+Run the complete backbone plus epoch-2, epoch-3, and epoch-6 teacher sequence on
+Ubuntu with:
+
+```bash
+bash scripts/train_backbone_and_teachers.sh
+```
+
 ## Project structure
 
 The codebase is organized as a modular monolith with a one-way dependency graph:

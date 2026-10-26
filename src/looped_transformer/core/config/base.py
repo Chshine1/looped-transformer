@@ -1,5 +1,3 @@
-"""Pydantic primitives shared by every domain."""
-
 from pathlib import Path
 from typing import Annotated, Any
 

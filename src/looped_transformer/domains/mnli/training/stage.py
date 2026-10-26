@@ -16,8 +16,10 @@ from looped_transformer.core.training.stage import StageTemplate
 from looped_transformer.core.training.training_stage_registry import (
     TrainingStageRegistry,
 )
-from looped_transformer.domains.mnli.loss import (
+from looped_transformer.domains.mnli.modules.anchored_sampled_ce_loss import (
     AnchoredSampledLoopCrossEntropyLoss,
+)
+from looped_transformer.domains.mnli.modules.anchored_sampled_ce_loss import (
     AnchoredSampledLoopLossOptions,
 )
 from looped_transformer.domains.mnli.services.data_provider import MNLIDataOptions

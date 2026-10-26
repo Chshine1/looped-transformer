@@ -28,6 +28,8 @@ class ModelTrainer[TBatch, *TModelInput, TModelOutput, TLossInput]:
         self,
         model: TypedModule[*TModelInput, TModelOutput],
         collator: ModelTrainingCollator[TBatch, *TModelInput, TLossInput],
+        stage: TrainingStage[TBatch, TModelOutput, TLossInput],
+        resume_from: str | None,
         checkpoint_saver: CheckpointSaver,
         checkpoint_loader: CheckpointLoader,
         device_options: DeviceOptions,
@@ -37,6 +39,8 @@ class ModelTrainer[TBatch, *TModelInput, TModelOutput, TLossInput]:
     ):
         self._model = model
         self._collator = collator
+        self._stage = stage
+        self._resume_from = resume_from
 
         self._checkpoint_saver = checkpoint_saver
         self._checkpoint_loader = checkpoint_loader
@@ -47,11 +51,9 @@ class ModelTrainer[TBatch, *TModelInput, TModelOutput, TLossInput]:
         self._training_options = training_options
         reproducibility_options.activate(device_options.device)
 
-    def train(
-        self,
-        stage: TrainingStage[TBatch, TModelOutput, TLossInput],
-        resume_from: str | None,
-    ) -> None:
+    def train(self) -> None:
+        stage = self._stage
+        resume_from = self._resume_from
         state = TrainingState(
             stage_id="",
             epoch=0,
@@ -63,6 +65,11 @@ class ModelTrainer[TBatch, *TModelInput, TModelOutput, TLossInput]:
             if resume_from is not None:
                 self._checkpoint_loader.load(resume_from)
                 state = self._checkpoint_loader.load_training_state()
+                if state.stage_id != stage.id:
+                    raise ValueError(
+                        f"Checkpoint stage {state.stage_id!r} cannot resume "
+                        f"configured stage {stage.id!r}"
+                    )
 
             self._model.torch.train()
             components = self._on_stage_begin(stage, state)

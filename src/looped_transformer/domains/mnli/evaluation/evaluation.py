@@ -1,5 +1,3 @@
-from pydantic import Field
-
 from looped_transformer.core.config.base import OptionsModel
 from looped_transformer.core.evaluation.evaluator import EvaluationCheckpointOptions
 from looped_transformer.core.logging.structural_logger import EvaluationOutputOptions
@@ -13,4 +11,4 @@ class EvaluationOptions(OptionsModel):
     checkpoint: EvaluationCheckpointOptions
     data: MNLIDataOptions
     output: EvaluationOutputOptions
-    diagnostics: LoopDiagnosticsOptions = Field(default_factory=LoopDiagnosticsOptions)
+    diagnostics: LoopDiagnosticsOptions

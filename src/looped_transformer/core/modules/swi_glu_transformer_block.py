@@ -1,5 +1,3 @@
-"""Reusable SwiGLU transformer block."""
-
 from torch import Tensor, nn
 from torch.nn import functional
 
@@ -8,13 +6,16 @@ from looped_transformer.core.config.base import (
     OptionsModel,
     PositiveInt,
 )
-from looped_transformer.core.nn.batch_dropout import BatchDropout, BatchDropoutOptions
-from looped_transformer.core.nn.multi_head_attention import (
+from looped_transformer.core.modules.batch_dropout import (
+    BatchDropout,
+    BatchDropoutOptions,
+)
+from looped_transformer.core.modules.multi_head_attention import (
     AttentionOptions,
     RoPEMultiHeadAttention,
 )
-from looped_transformer.core.nn.positional_rope import PositionalRoPECache
-from looped_transformer.core.nn.residual_scale import ResidualScale
+from looped_transformer.core.modules.positional_rope import PositionalRoPECache
+from looped_transformer.core.modules.residual_scale import ResidualScale
 
 
 class TransformerBlockOptions(OptionsModel):

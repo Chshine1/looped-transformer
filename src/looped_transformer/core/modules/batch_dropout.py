@@ -1,5 +1,3 @@
-"""Dropout shared across a batch dimension."""
-
 import torch
 from torch import Tensor, nn
 

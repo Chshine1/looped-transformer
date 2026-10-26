@@ -1,5 +1,3 @@
-"""Cached positional rotary embeddings."""
-
 import torch
 from torch import Tensor, nn
 
