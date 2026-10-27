@@ -45,16 +45,20 @@ from looped_transformer.domains.mnli.types.model import ModelForwardOutput
 def build_container(options: AppOptions) -> Container:
     container = Container()
     container[AppOptions] = options
+    artifact_values = {
+        "runtime": options.runtime,
+        "model": options.model,
+        "tokenizer": options.tokenizer,
+        "stage": options.training.stage,
+        "resume_from": _checkpoint_reference(options.training.resume_from),
+        "stage_source": _stage_source_reference(options.training.stage),
+    }
+    controller_source = options.training.stage.get("controller_checkpoint")
+    if controller_source is not None:
+        artifact_values["controller_source"] = _checkpoint_reference(controller_source)
     container[ArtifactSpec] = ArtifactSpec(
         format="looped-transformer-training-v2",
-        values={
-            "runtime": options.runtime,
-            "model": options.model,
-            "tokenizer": options.tokenizer,
-            "stage": options.training.stage,
-            "resume_from": _checkpoint_reference(options.training.resume_from),
-            "stage_source": _stage_source_reference(options.training.stage),
-        },
+        values=artifact_values,
     )
     container[CheckpointSavingOptions] = options.checkpoint
     container[TokenizerOptions] = options.tokenizer

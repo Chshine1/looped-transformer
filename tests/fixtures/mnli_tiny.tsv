@@ -1,0 +1,3 @@
+sentence1	sentence2	gold_label
+A person is walking outdoors.	Someone is outside.	entailment
+Two dogs are running through a field.	No animals are moving.	contradiction

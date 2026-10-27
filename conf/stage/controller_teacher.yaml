@@ -19,10 +19,11 @@ data_options:
   shuffle_chunk_size: 10000
 training_batch_size: 40
 loss_options:
-  incorrect_prediction_cost: 0.5
+  type: smoothed_per_loop_correctness_bce
+  target_smoothing: 0.1
 optimizer_options:
   learning_rates:
-    '.*': 0.0003
+    '.*': 0.0002
   weight_decay: 0.01
   beta1: 0.9
   beta2: 0.999

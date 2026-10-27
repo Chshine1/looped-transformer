@@ -1,6 +1,6 @@
 import math
 from collections.abc import Callable, Iterable
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from torch import Tensor, nn
 from torch.optim import Optimizer
@@ -14,7 +14,7 @@ from looped_transformer.core.abstractions.training.training_stage_template impor
 from looped_transformer.core.abstractions.typed_module import TypedModule
 from looped_transformer.core.config.base import (
     ConfigPath,
-    NonNegativeFloat,
+    ExclusiveProbability,
     OptionsModel,
     PositiveInt,
 )
@@ -35,7 +35,10 @@ from looped_transformer.utils.torch.schedulers import SchedulerOptions, create_s
 
 
 class ControllerTeacherLossOptions(OptionsModel):
-    incorrect_prediction_cost: NonNegativeFloat = 0.5
+    type: Literal["smoothed_per_loop_correctness_bce"] = (
+        "smoothed_per_loop_correctness_bce"
+    )
+    target_smoothing: ExclusiveProbability = 0.1
 
 
 class ControllerTeacherStageTemplate(StageTemplate):
@@ -51,11 +54,8 @@ class ControllerTeacherStageTemplate(StageTemplate):
 def _get_loss(
     template: ControllerTeacherStageTemplate,
 ) -> TypedModule[Tensor, ControllerTeacherLossInput, Tensor]:
-    return TypedModule(
-        ControllerTeacherLoss(
-            template.loss_options.incorrect_prediction_cost,
-        )
-    )
+    options = template.loss_options
+    return TypedModule(ControllerTeacherLoss(target_smoothing=options.target_smoothing))
 
 
 def _get_optimizer_factory(

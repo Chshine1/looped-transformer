@@ -74,11 +74,58 @@ set. In practice, budget roughly one to two backbone-training epochs per teacher
 run; the three teachers add approximately 50--100% to the six-epoch backbone
 run. Actual wall time depends strongly on tokenization and CUDA kernel throughput.
 
+The controller teacher is a soft, full-trajectory depth teacher. It predicts
+each loop's correctness independently with one smoothed BCE objective, avoiding
+the false requirement that exactly one loop must be correct. During guided
+backbone training, those correctness scores are converted into a moderately
+focused distribution, blurred across neighboring loops and mixed with a uniform
+floor. Because its bidirectional GRU consumes the complete trajectory, it can
+guide later backbone refinement but does not itself provide online early-exit
+compute savings.
+
 Run the complete backbone plus epoch-2, epoch-3, and epoch-6 teacher sequence on
 Ubuntu with:
 
 ```bash
 bash scripts/train_backbone_and_teachers.sh
+```
+
+For alternating training, first reserve a deterministic 4,000-example slice of
+matched validation for cycle selection. The untouched remainder and mismatched
+validation are used only for final comparisons:
+
+```powershell
+python scripts/split_mnli_cycle_data.py
+```
+
+Run the full gated controller/backbone alternation from the chosen (normally
+epoch-2) backbone checkpoint:
+
+```bash
+bash scripts/run_alternating_training.sh \
+  outputs/<run>/<artifact>/backbone_warmup/checkpoint-epoch-2.pt 1
+```
+
+Each cycle trains a one-epoch controller with smoothed per-loop correctness BCE,
+evaluates it on both sampled training data and `data/mnli_cycle_dev.tsv`, and
+rejects controllers that are uninformative, nearly uniform, over-confident, or
+worse than the final loop. Controller sigmoid scores are converted to soft loop
+weights with moderate temperature sharpening, neighboring-loop smoothing, and a
+uniform floor. The guided stage freezes the controller, detaches those weights,
+removes the final-loop anchor, and saves a plain backbone-compatible checkpoint.
+The new backbone must also preserve cycle-dev accuracy and cross-entropy before
+it becomes the source for the next cycle. Final matched and mismatched holdouts
+remain untouched by cycle selection.
+
+To run just the guided stage manually:
+
+```powershell
+pixi run looped-transformer --config-dir conf `
+  --override stage=guided_backbone `
+  --override training.stage.source_checkpoint=outputs/<backbone>.pt `
+  --override training.stage.controller_checkpoint=outputs/<controller>.pt `
+  --override checkpoint.output_dir=outputs/guided-backbone-cycle-1 `
+  train
 ```
 
 ## Project structure

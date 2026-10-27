@@ -32,6 +32,12 @@ from looped_transformer.domains.controller_teacher import (
     ControllerTeacherStageTemplate,
     register_controller_teacher_stage_template,
 )
+from looped_transformer.domains.guided_backbone import (
+    ControllerGuidedBackbone,
+    ControllerGuidedBackboneStageTemplate,
+    GuidedBackboneOutput,
+    register_controller_guided_backbone_stage,
+)
 from looped_transformer.domains.mnli.config.options import LoopOptions
 from looped_transformer.domains.mnli.evaluation.evaluation import EvaluationOptions
 from looped_transformer.domains.mnli.evaluation.loop_diagnostics import (
@@ -178,6 +184,66 @@ def main() -> None:
                 teacher,
                 ControllerTeacherCollator(),
                 teacher_registry.resolve(),
+            )
+        elif stage_type == "controller_guided_backbone":
+            device_options = container[DeviceOptions]
+            precision_options = container[PrecisionOptions]
+            sequence_options = container[SequenceOptions]
+            tokenizer = container[MNLITokenizer]
+            template = ControllerGuidedBackboneStageTemplate.model_validate(
+                {
+                    key: value
+                    for key, value in options.training.stage.items()
+                    if key != "type"
+                }
+            )
+
+            backbone_typed = _model_factory(
+                options.model,
+                sequence_options,
+                tokenizer,
+                device_options,
+                precision_options,
+            )
+            backbone = backbone_typed.torch
+            if not isinstance(backbone, LoopedMNLI):
+                raise TypeError("Expected a LoopedMNLI backbone")
+            backbone_loader = CheckpointLoader(device_options)
+            try:
+                backbone_loader.load(template.source_checkpoint)
+                backbone_loader.load_model(backbone)
+            finally:
+                backbone_loader.dispose()
+
+            teacher_options = container[ControllerTeacherOptions]
+            controller = ControllerTeacher(teacher_options, sequence_options).to(
+                device=device_options.device,
+                dtype=precision_options.dtype,
+            )
+            controller_loader = CheckpointLoader(device_options)
+            try:
+                controller_loader.load(template.controller_checkpoint)
+                controller_loader.load_model(controller)
+            finally:
+                controller_loader.dispose()
+
+            guided_registry = TrainingStageRegistry[
+                MNLIBatch,
+                GuidedBackboneOutput,
+                Tensor,
+            ](options.training)
+            register_controller_guided_backbone_stage(guided_registry)
+            guided_model = TypedModule(
+                ControllerGuidedBackbone(
+                    backbone,
+                    controller,
+                    template.guidance_options,
+                )
+            )
+            trainer = trainer_factory.create(
+                guided_model,
+                MNLICollator(tokenizer),
+                guided_registry.resolve(),
             )
         else:
             raise ValueError(f"Unknown training stage type: {stage_type!r}")

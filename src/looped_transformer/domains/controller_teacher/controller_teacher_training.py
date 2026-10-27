@@ -18,6 +18,43 @@ class ControllerTeacherLossInput:
     labels: Tensor
 
 
+def build_loop_quality_targets(
+    timed_logits: Tensor,
+    labels: Tensor,
+    temperature: float,
+    neighbor_smoothing: float,
+    uniform_smoothing: float,
+) -> Tensor:
+    """Create a blurred distribution over correct loops.
+
+    All correct loops share the base mass. Examples for which no loop is correct
+    fall back to a soft distribution based on true-label cross-entropy.
+    """
+    loop_count, sample_count, classes = timed_logits.shape
+    cross_entropy = functional.cross_entropy(
+        timed_logits.float().reshape(-1, classes),
+        labels.repeat(loop_count),
+        reduction="none",
+    ).reshape(loop_count, sample_count)
+    fallback = torch.softmax(-cross_entropy / temperature, dim=0)
+    correct = timed_logits.argmax(dim=-1).eq(labels.unsqueeze(0)).float()
+    correct_count = correct.sum(dim=0, keepdim=True)
+    correct_distribution = correct / correct_count.clamp_min(1)
+    quality = torch.where(correct_count > 0, correct_distribution, fallback)
+
+    if loop_count > 1 and neighbor_smoothing > 0:
+        side_weight = neighbor_smoothing / 2
+        smoothed = (1 - neighbor_smoothing) * quality
+        smoothed[:-1] += side_weight * quality[1:]
+        smoothed[1:] += side_weight * quality[:-1]
+        # Keep mass that would otherwise fall outside the trajectory at its edge.
+        smoothed[0] += side_weight * quality[0]
+        smoothed[-1] += side_weight * quality[-1]
+        quality = smoothed
+
+    return (1 - uniform_smoothing) * quality + uniform_smoothing / loop_count
+
+
 class ControllerTeacherCollator(
     ModelTrainingCollator[
         ControllerTeacherBatch,
@@ -50,13 +87,11 @@ class ControllerTeacherCollator(
 
 
 class ControllerTeacherLoss(nn.Module):
-    """Expected frozen-backbone classification cost under teacher loop choices."""
+    """Predict per-loop correctness with deliberately smoothed binary targets."""
 
-    def __init__(self, incorrect_prediction_cost: float = 0.5) -> None:
+    def __init__(self, target_smoothing: float = 0.1) -> None:
         super().__init__()
-        if incorrect_prediction_cost < 0:
-            raise ValueError("incorrect_prediction_cost must be non-negative")
-        self._incorrect_prediction_cost = incorrect_prediction_cost
+        self._target_smoothing = target_smoothing
 
     def forward(
         self,
@@ -65,21 +100,18 @@ class ControllerTeacherLoss(nn.Module):
     ) -> Tensor:
         logits = targets.timed_logits.float()
         if logits.ndim != 3:
-            raise ValueError(
-                "timed_logits must have shape (loops, samples, classes)"
-            )
+            raise ValueError("timed_logits must have shape (loops, samples, classes)")
         if loop_logits.shape != logits.shape[:2]:
             raise ValueError(
                 "loop_logits must have shape (loops, samples) matching timed_logits"
             )
+        if targets.labels.shape != (logits.shape[1],):
+            raise ValueError("labels must have shape (samples,)")
 
-        loop_count, _, classes = logits.shape
-        cross_entropy = functional.cross_entropy(
-            logits.reshape(-1, classes),
-            targets.labels.repeat(loop_count),
-            reduction="none",
-        ).reshape(loop_count, -1)
-        incorrect = logits.argmax(dim=-1).ne(targets.labels).float()
-        costs = cross_entropy + self._incorrect_prediction_cost * incorrect
-        loop_probabilities = torch.softmax(loop_logits.float(), dim=0)
-        return (loop_probabilities * costs).sum(dim=0).mean()
+        correctness = logits.argmax(dim=-1).eq(targets.labels.unsqueeze(0)).float()
+        smoothed_targets = correctness * (1 - 2 * self._target_smoothing) + (
+            self._target_smoothing
+        )
+        return functional.binary_cross_entropy_with_logits(
+            loop_logits.float(), smoothed_targets
+        )
