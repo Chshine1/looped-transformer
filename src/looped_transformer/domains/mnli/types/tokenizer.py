@@ -15,3 +15,4 @@ class TokenizerInfo:
 class TokenizeResult:
     input_ids: Tensor
     attention_mask: Tensor
+    token_type_ids: Tensor

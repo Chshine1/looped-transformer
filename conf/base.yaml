@@ -17,13 +17,24 @@ runtime:
 
 tokenizer:
   source:
-    pretrained_model: bert-base-uncased
+    pretrained_model: google-bert/bert-base-uncased
+    revision: 86b5e0934494bd15c9632b12f734a8a67f723594
   sequence:
     max_sequence_length: 128
 
 model:
   hidden_state_dimension: 256
   output_classes_count: 3
+  embedding:
+    segment_types_count: 2
+    initialization:
+      pretrained_model: google-bert/bert-base-uncased
+      revision: 86b5e0934494bd15c9632b12f734a8a67f723594
+      source_dimension: 768
+      cache_dir: data/pretrained-embedding-cache
+      local_files_only: false
+      pca_oversampling: 32
+      pca_power_iterations: 4
   loop:
     max_iterations: 6
     time_rope_base_frequency: 4.8

@@ -11,14 +11,15 @@ from transformers.utils import PaddingStrategy
 from looped_transformer.core.config.base import NonEmptyString, OptionsModel
 from looped_transformer.core.config.sequence import SequenceOptions
 from looped_transformer.domains.mnli.types.tokenizer import (
-    TokenizerInfo,
     TokenizeResult,
+    TokenizerInfo,
 )
 
 
 class TokenizerOptions(OptionsModel):
     class _TokenizerSourceOptions(OptionsModel):
         pretrained_model: NonEmptyString
+        revision: NonEmptyString
 
     source: _TokenizerSourceOptions
     sequence: SequenceOptions
@@ -27,6 +28,7 @@ class TokenizerOptions(OptionsModel):
 class MNLITokenizer:
     def __init__(self, options: TokenizerOptions) -> None:
         self._max_sequence_length = options.sequence.max_sequence_length
+        self._revision = options.source.revision
         offline = os.environ.get("HF_HUB_OFFLINE", "").lower() in {
             "1",
             "true",
@@ -37,6 +39,7 @@ class MNLITokenizer:
         print(f"Loading {model_name} tokenizer ({source})...", flush=True)
         self._tokenizer = BertTokenizerFast.from_pretrained(
             model_name,
+            revision=self._revision,
             local_files_only=offline,
         )
         print("Tokenizer loaded.", flush=True)
@@ -64,4 +67,5 @@ class MNLITokenizer:
         return TokenizeResult(
             input_ids=encoding["input_ids"],
             attention_mask=encoding["attention_mask"],
+            token_type_ids=encoding["token_type_ids"],
         )

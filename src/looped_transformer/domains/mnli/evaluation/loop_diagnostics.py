@@ -1,4 +1,3 @@
-from looped_transformer.domains.mnli.config.options import LoopOptions
 from dataclasses import dataclass
 from typing import Any, override
 
@@ -16,6 +15,7 @@ from looped_transformer.core.config.base import (
 from looped_transformer.core.config.runtime import DeviceOptions
 from looped_transformer.core.evaluation import EvaluationPolicy
 from looped_transformer.core.logging import StructuralLogger
+from looped_transformer.domains.mnli.config.options import LoopOptions
 from looped_transformer.domains.mnli.types.batch import MNLIBatch
 from looped_transformer.domains.mnli.types.logic_relation import LogicRelation
 from looped_transformer.domains.mnli.types.model import ModelForwardOutput
@@ -69,7 +69,7 @@ class _MetricTotals:
 
 
 class LoopDiagnosticsPolicy(
-    EvaluationPolicy[MNLIBatch, Tensor, Tensor, ModelForwardOutput]
+    EvaluationPolicy[MNLIBatch, Tensor, Tensor, Tensor, ModelForwardOutput]
 ):
     _target_histogram: Tensor | None
     _final_prediction_histogram: Tensor | None
@@ -105,6 +105,18 @@ class LoopDiagnosticsPolicy(
             self._max_iterations, device=self._device
         )
         self._per_loop_correct = torch.zeros(self._max_iterations, device=self._device)
+        self._per_loop_true_label_probability = torch.zeros(
+            self._max_iterations, device=self._device
+        )
+        self._per_loop_prediction_confidence = torch.zeros(
+            self._max_iterations, device=self._device
+        )
+        self._per_loop_correct_confidence = torch.zeros(
+            self._max_iterations, device=self._device
+        )
+        self._per_loop_incorrect_confidence = torch.zeros(
+            self._max_iterations, device=self._device
+        )
         self._oracle_best_loop_histogram = torch.zeros(
             self._max_iterations, dtype=torch.long, device=self._device
         )
@@ -128,6 +140,12 @@ class LoopDiagnosticsPolicy(
         self._adjacent_prediction_changes = torch.zeros(
             max(0, self._max_iterations - 1), device=self._device
         )
+        self._adjacent_rescues = torch.zeros(
+            max(0, self._max_iterations - 1), device=self._device
+        )
+        self._adjacent_harms = torch.zeros(
+            max(0, self._max_iterations - 1), device=self._device
+        )
         self._final_prediction_agreements = torch.zeros(
             self._max_iterations, device=self._device
         )
@@ -136,7 +154,9 @@ class LoopDiagnosticsPolicy(
         self._per_loop_prediction_histogram: Tensor | None = None
 
     @override
-    def reset(self, model: TypedModule[Tensor, Tensor, ModelForwardOutput]) -> None:
+    def reset(
+        self, model: TypedModule[Tensor, Tensor, Tensor, ModelForwardOutput]
+    ) -> None:
         self._initialize_state()
         self._logger.start()
 
@@ -246,6 +266,12 @@ class LoopDiagnosticsPolicy(
         )
         predictions_by_loop = timed_logits.argmax(dim=-1)
         correct_by_loop = predictions_by_loop == labels.unsqueeze(0)
+        probabilities_by_loop = timed_logits.softmax(dim=-1)
+        label_indices = labels.view(1, sample_count, 1).expand(loop_count, -1, -1)
+        true_label_probability = probabilities_by_loop.gather(2, label_indices).squeeze(
+            -1
+        )
+        prediction_confidence = probabilities_by_loop.max(dim=-1).values
 
         final_raw = raw_by_loop[-1]
         final_smooth = smooth_by_loop[-1]
@@ -295,6 +321,14 @@ class LoopDiagnosticsPolicy(
         self._per_loop_raw_cross_entropy += per_loop_raw
         self._per_loop_smooth_cross_entropy += per_loop_smooth
         self._per_loop_correct += per_loop_correct
+        self._per_loop_true_label_probability += true_label_probability.sum(dim=1)
+        self._per_loop_prediction_confidence += prediction_confidence.sum(dim=1)
+        self._per_loop_correct_confidence += (
+            prediction_confidence * correct_by_loop
+        ).sum(dim=1)
+        self._per_loop_incorrect_confidence += (
+            prediction_confidence * (~correct_by_loop)
+        ).sum(dim=1)
         oracle_histogram = torch.bincount(oracle_best_loops, minlength=loop_count)
         self._oracle_best_loop_histogram += oracle_histogram
         self._shuffled_raw_cross_entropy += shuffled_raw.sum(dim=1)
@@ -316,6 +350,12 @@ class LoopDiagnosticsPolicy(
             self._adjacent_prediction_changes += (
                 predictions_by_loop[1:] != predictions_by_loop[:-1]
             ).sum(dim=1)
+            self._adjacent_rescues += (
+                (~correct_by_loop[:-1]) & correct_by_loop[1:]
+            ).sum(dim=1)
+            self._adjacent_harms += (correct_by_loop[:-1] & (~correct_by_loop[1:])).sum(
+                dim=1
+            )
         self._final_prediction_agreements += (
             predictions_by_loop == predictions_by_loop[-1:]
         ).sum(dim=1)
@@ -400,6 +440,12 @@ class LoopDiagnosticsPolicy(
                 "raw_cross_entropy": self._round_values(raw_by_loop.mean(dim=1)),
                 "smooth_cross_entropy": self._round_values(smooth_by_loop.mean(dim=1)),
                 "accuracy": self._round_values(correct_by_loop.float().mean(dim=1)),
+                "true_label_probability": self._round_values(
+                    true_label_probability.mean(dim=1)
+                ),
+                "prediction_confidence": self._round_values(
+                    prediction_confidence.mean(dim=1)
+                ),
                 "oracle_best_loop_histogram": oracle_histogram.cpu().tolist(),
             },
             prediction_trajectory={
@@ -407,6 +453,12 @@ class LoopDiagnosticsPolicy(
                     (predictions_by_loop[1:] != predictions_by_loop[:-1])
                     .float()
                     .mean(dim=1)
+                ),
+                "adjacent_rescue_rate": self._round_values(
+                    ((~correct_by_loop[:-1]) & correct_by_loop[1:]).float().mean(dim=1)
+                ),
+                "adjacent_harm_rate": self._round_values(
+                    (correct_by_loop[:-1] & (~correct_by_loop[1:])).float().mean(dim=1)
                 ),
                 "final_agreement_rate": self._round_values(
                     (predictions_by_loop == predictions_by_loop[-1:])
@@ -428,6 +480,19 @@ class LoopDiagnosticsPolicy(
         per_loop_raw = self._per_loop_raw_cross_entropy / sample_count
         per_loop_smooth = self._per_loop_smooth_cross_entropy / sample_count
         per_loop_accuracy = self._per_loop_correct / sample_count
+        per_loop_true_label_probability = (
+            self._per_loop_true_label_probability / sample_count
+        )
+        per_loop_prediction_confidence = (
+            self._per_loop_prediction_confidence / sample_count
+        )
+        per_loop_correct_confidence = self._per_loop_correct_confidence / (
+            self._per_loop_correct.clamp_min(1)
+        )
+        per_loop_incorrect_count = sample_count - self._per_loop_correct
+        per_loop_incorrect_confidence = self._per_loop_incorrect_confidence / (
+            per_loop_incorrect_count.clamp_min(1)
+        )
         best_fixed_loop = int(per_loop_raw.argmin().item())
 
         oracle_metrics = self._oracle_totals.means(sample_count)
@@ -511,6 +576,18 @@ class LoopDiagnosticsPolicy(
                 "raw_cross_entropy": self._round_values(per_loop_raw),
                 "smooth_cross_entropy": self._round_values(per_loop_smooth),
                 "accuracy": self._round_values(per_loop_accuracy),
+                "true_label_probability": self._round_values(
+                    per_loop_true_label_probability
+                ),
+                "prediction_confidence": self._round_values(
+                    per_loop_prediction_confidence
+                ),
+                "correct_prediction_confidence": self._round_values(
+                    per_loop_correct_confidence
+                ),
+                "incorrect_prediction_confidence": self._round_values(
+                    per_loop_incorrect_confidence
+                ),
                 "oracle_best_loop_histogram": (
                     self._oracle_best_loop_histogram.cpu().tolist()
                 ),
@@ -518,6 +595,12 @@ class LoopDiagnosticsPolicy(
             "prediction_trajectory": {
                 "adjacent_change_rate": self._round_values(
                     self._adjacent_prediction_changes / sample_count
+                ),
+                "adjacent_rescue_rate": self._round_values(
+                    self._adjacent_rescues / sample_count
+                ),
+                "adjacent_harm_rate": self._round_values(
+                    self._adjacent_harms / sample_count
                 ),
                 "final_agreement_rate": self._round_values(
                     self._final_prediction_agreements / sample_count

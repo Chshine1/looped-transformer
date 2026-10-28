@@ -1,4 +1,3 @@
-from looped_transformer.domains.mnli.config.options import LoopOptions
 import math
 from typing import Self
 
@@ -8,9 +7,15 @@ from pydantic import model_validator
 from torch import Tensor
 
 from looped_transformer.core.abstractions.typed_module import IModule
-from looped_transformer.core.config.base import ExclusiveProbability
-from looped_transformer.core.config.base import FiniteFloat
-from looped_transformer.core.config.base import OptionsModel, PositiveInt
+from looped_transformer.core.config.base import (
+    ConfigPath,
+    ExclusiveProbability,
+    FiniteFloat,
+    NonEmptyString,
+    NonNegativeInt,
+    OptionsModel,
+    PositiveInt,
+)
 from looped_transformer.core.config.sequence import SequenceOptions
 from looped_transformer.core.modules.attention_residual import (
     AttentionResidualOptions,
@@ -29,6 +34,7 @@ from looped_transformer.core.modules.timed_rope import (
     TimedMultiHeadRoPECache,
     TimedRoPEOptions,
 )
+from looped_transformer.domains.mnli.config.options import LoopOptions
 from looped_transformer.domains.mnli.modules.halting_cell import (
     HaltingCell,
     HaltingCellOptions,
@@ -40,6 +46,19 @@ from looped_transformer.utils.torch.functional import apply_rotary
 
 
 class ModelOptions(OptionsModel):
+    class _PretrainedEmbeddingOptions(OptionsModel):
+        pretrained_model: NonEmptyString
+        revision: NonEmptyString
+        source_dimension: PositiveInt = 768
+        cache_dir: ConfigPath
+        local_files_only: bool = False
+        pca_oversampling: NonNegativeInt = 32
+        pca_power_iterations: PositiveInt = 4
+
+    class _EmbeddingOptions(OptionsModel):
+        segment_types_count: PositiveInt = 2
+        initialization: "ModelOptions._PretrainedEmbeddingOptions"
+
     class _DropoutOptions(OptionsModel):
         token: ExclusiveProbability = 0.0
         embedding: ExclusiveProbability = 0.1
@@ -62,6 +81,7 @@ class ModelOptions(OptionsModel):
 
     hidden_state_dimension: PositiveInt
     output_classes_count: PositiveInt
+    embedding: _EmbeddingOptions
     loop: LoopOptions
     dropout: _DropoutOptions
     transformer: _TransformerOptions
@@ -73,6 +93,14 @@ class ModelOptions(OptionsModel):
         if self.hidden_state_dimension % heads:
             raise ValueError(
                 "hidden_state_dimension must be divisible by attention_heads_count"
+            )
+        if (
+            self.hidden_state_dimension
+            >= self.embedding.initialization.source_dimension
+        ):
+            raise ValueError(
+                "hidden_state_dimension must be below the pretrained embedding "
+                "source_dimension for PCA initialization"
             )
         return self
 
@@ -86,7 +114,7 @@ class LoopModuleOptions(OptionsModel):
     max_iterations: PositiveInt
 
 
-class LoopedMNLI(nn.Module, IModule[Tensor, Tensor, ModelForwardOutput]):
+class LoopedMNLI(nn.Module, IModule[Tensor, Tensor, Tensor, ModelForwardOutput]):
     class _MultiHeadRotation(nn.Module):
         _timed_rope_cache: TimedMultiHeadRoPECache
 
@@ -201,6 +229,11 @@ class LoopedMNLI(nn.Module, IModule[Tensor, Tensor, ModelForwardOutput]):
             dim,
             padding_idx=tokenizer_info.pad_token_id,
         )
+        self._segment_embedding = nn.Embedding(
+            model_options.embedding.segment_types_count,
+            dim,
+        )
+        self._padding_token_id = tokenizer_info.pad_token_id
         self._token_dropout = dropout.token
         self._mask_token_id = tokenizer_info.mask_token_id
         self._special_token_ids = tokenizer_info.special_token_ids
@@ -252,6 +285,7 @@ class LoopedMNLI(nn.Module, IModule[Tensor, Tensor, ModelForwardOutput]):
         self,
         input_ids: Tensor,
         padding_mask: Tensor,
+        token_type_ids: Tensor,
     ) -> ModelForwardOutput:
         dimension = self._model_options.hidden_state_dimension
         batch_size, seq_length = input_ids.shape
@@ -265,7 +299,9 @@ class LoopedMNLI(nn.Module, IModule[Tensor, Tensor, ModelForwardOutput]):
             ) & eligible
             input_ids = input_ids.masked_fill(dropped, self._mask_token_id)
 
-        h0: Tensor = self._embedding_dropout(self._token_embedding(input_ids))
+        h0: Tensor = self._embedding_dropout(
+            self._token_embedding(input_ids) + self._segment_embedding(token_type_ids)
+        )
         h: Tensor = h0
         history_states: list[Tensor] = [h0]
 
@@ -316,3 +352,37 @@ class LoopedMNLI(nn.Module, IModule[Tensor, Tensor, ModelForwardOutput]):
             "halt_probabilities": timed_hazards * timed_survivals,
             "time_rope_regularization": self._attn_res.time_rope_regularization(),
         }
+
+    @property
+    def embedding_dimension(self) -> int:
+        return self._token_embedding.embedding_dim
+
+    @torch.no_grad()
+    def initialize_input_embeddings(
+        self, token_embeddings: Tensor, segment_embeddings: Tensor
+    ) -> None:
+        if token_embeddings.shape != self._token_embedding.weight.shape:
+            raise ValueError(
+                "token embedding shape mismatch: "
+                f"expected {tuple(self._token_embedding.weight.shape)}, "
+                f"got {tuple(token_embeddings.shape)}"
+            )
+        if segment_embeddings.shape != self._segment_embedding.weight.shape:
+            raise ValueError(
+                "segment embedding shape mismatch: "
+                f"expected {tuple(self._segment_embedding.weight.shape)}, "
+                f"got {tuple(segment_embeddings.shape)}"
+            )
+        self._token_embedding.weight.copy_(
+            token_embeddings.to(
+                device=self._token_embedding.weight.device,
+                dtype=self._token_embedding.weight.dtype,
+            )
+        )
+        self._token_embedding.weight[self._padding_token_id].zero_()
+        self._segment_embedding.weight.copy_(
+            segment_embeddings.to(
+                device=self._segment_embedding.weight.device,
+                dtype=self._segment_embedding.weight.dtype,
+            )
+        )

@@ -18,6 +18,14 @@ data_options:
   label_column: gold_label
   shuffle_cache_dir: data/shuffled
   shuffle_chunk_size: 10000
+teacher:
+  pretrained_model: cross-encoder/nli-deberta-v3-base
+  revision: main
+  max_sequence_length: 128
+  dtype: float16
+  local_files_only: false
+  # Raw external-model logit order before conversion to the project order.
+  label_order: [ contradiction, entailment, neutral ]
 loss_options:
   type: anchored_sampled_loop_cross_entropy
   sampled_loops: [ 3, 4, 5 ]
@@ -25,6 +33,9 @@ loss_options:
   sampled_loss_scale: 0.20
   label_smoothing: 0.05
   time_rope_regularization_scale: 0.01
+  # Set to 0 to skip loading and running the external teacher entirely.
+  distillation_scale: 0.0
+  teacher_temperature: 2.0
 optimizer_options:
   learning_rates:
     '_attn_res\._residual_scale': 0.0001
@@ -32,7 +43,8 @@ optimizer_options:
     '_attn_res': 0.0001
     '_attn_res\._[qk]_proj': 0.0003
     '_attn_res\._(?:v|out)_proj': 0.0004
-    '_token_embedding': 0.0004
+    '_token_embedding': 0.00005
+    '_segment_embedding': 0.00005
     '_loop\._transformer_block[12]\._normalization[12]': 0.0002
     '_loop\._transformer_block[12](?:\..*)?': 0.0004
     '_loop\._loop_normalization': 0.0002

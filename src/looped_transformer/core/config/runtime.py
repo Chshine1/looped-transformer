@@ -8,8 +8,7 @@ from looped_transformer.core.training.config import (
     ReproducibilityOptions,
     TrainingRuntimeOptions,
 )
-from looped_transformer.utils.pydantic import TorchDType
-from looped_transformer.utils.pydantic import TorchDevice
+from looped_transformer.utils.pydantic import TorchDevice, TorchDType
 
 
 class DeviceOptions(OptionsModel):

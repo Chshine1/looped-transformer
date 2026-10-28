@@ -15,9 +15,9 @@ from looped_transformer.core.training.stage import StageTemplate, TrainingOption
 class TrainingStageRegistry[TBatch, TModelOutput, TLossInput]:
     def __init__(self, options: TrainingOptions) -> None:
         self._options = options
-        self._factory: Callable[
-            [], TrainingStage[TBatch, TModelOutput, TLossInput]
-        ] | None = None
+        self._factory: (
+            Callable[[], TrainingStage[TBatch, TModelOutput, TLossInput]] | None
+        ) = None
 
     def register[TTemplate: StageTemplate](
         self,

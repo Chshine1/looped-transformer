@@ -18,12 +18,16 @@ from looped_transformer.core.training.training_stage_registry import (
 )
 from looped_transformer.domains.mnli.modules.anchored_sampled_ce_loss import (
     AnchoredSampledLoopCrossEntropyLoss,
-)
-from looped_transformer.domains.mnli.modules.anchored_sampled_ce_loss import (
     AnchoredSampledLoopLossOptions,
+    BackboneLossInput,
 )
-from looped_transformer.domains.mnli.services.data_provider import MNLIDataOptions
-from looped_transformer.domains.mnli.services.data_provider import MNLIDataProvider
+from looped_transformer.domains.mnli.services.data_provider import (
+    MNLIDataOptions,
+    MNLIDataProvider,
+)
+from looped_transformer.domains.mnli.training.backbone_collator import (
+    ExternalTeacherOptions,
+)
 from looped_transformer.domains.mnli.types.batch import MNLIBatch
 from looped_transformer.domains.mnli.types.model import ModelForwardOutput
 from looped_transformer.utils.torch.optim import AdamWOptions, create_adam_w_optimizer
@@ -33,6 +37,7 @@ from looped_transformer.utils.torch.schedulers import SchedulerOptions, create_s
 class LoopedMNLIStageTemplate(StageTemplate):
     type: ClassVar[str] = "looped_mnli"
     data_options: MNLIDataOptions
+    teacher: ExternalTeacherOptions
     loss_options: AnchoredSampledLoopLossOptions
     optimizer_options: AdamWOptions
     scheduler_options: SchedulerOptions
@@ -44,7 +49,7 @@ def _get_data_provider(template: LoopedMNLIStageTemplate) -> IDataProvider[MNLIB
 
 def _get_loss(
     template: LoopedMNLIStageTemplate,
-) -> TypedModule[ModelForwardOutput, Tensor, Tensor]:
+) -> TypedModule[ModelForwardOutput, BackboneLossInput, Tensor]:
     loss = AnchoredSampledLoopCrossEntropyLoss(template.loss_options)
     return TypedModule(loss)
 
@@ -74,7 +79,9 @@ def _get_scheduler_factory(
 
 
 def register_looped_mnli_stage_template(
-    stage_registry: TrainingStageRegistry[MNLIBatch, ModelForwardOutput, Tensor],
+    stage_registry: TrainingStageRegistry[
+        MNLIBatch, ModelForwardOutput, BackboneLossInput
+    ],
 ) -> None:
     stage_registry.register(
         LoopedMNLIStageTemplate,

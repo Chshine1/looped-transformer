@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Annotated, Literal, Self
 
 import torch
@@ -10,9 +11,16 @@ from looped_transformer.core.config.base import (
     ExclusiveProbability,
     NonNegativeFloat,
     OptionsModel,
+    PositiveFloat,
     PositiveInt,
 )
 from looped_transformer.domains.mnli.types.model import ModelForwardOutput
+
+
+@dataclass(frozen=True, slots=True)
+class BackboneLossInput:
+    labels: Tensor
+    teacher_logits: Tensor | None = None
 
 
 class AnchoredSampledLoopLossOptions(OptionsModel):
@@ -26,6 +34,8 @@ class AnchoredSampledLoopLossOptions(OptionsModel):
     sampled_loss_scale: NonNegativeFloat
     label_smoothing: ExclusiveProbability = 0.0
     time_rope_regularization_scale: NonNegativeFloat = 0.0
+    distillation_scale: NonNegativeFloat = 0.0
+    teacher_temperature: PositiveFloat = 2.0
 
     @model_validator(mode="after")
     def validate_samples(self) -> Self:
@@ -39,7 +49,7 @@ class AnchoredSampledLoopLossOptions(OptionsModel):
 
 
 class AnchoredSampledLoopCrossEntropyLoss(
-    nn.Module, IModule[ModelForwardOutput, Tensor, Tensor]
+    nn.Module, IModule[ModelForwardOutput, BackboneLossInput, Tensor]
 ):
     def __init__(
         self,
@@ -52,8 +62,11 @@ class AnchoredSampledLoopCrossEntropyLoss(
         self._sampled_loss_scale = options.sampled_loss_scale
         self._label_smoothing = options.label_smoothing
         self._time_rope_regularization_scale = options.time_rope_regularization_scale
+        self._distillation_scale = options.distillation_scale
+        self._teacher_temperature = options.teacher_temperature
 
-    def forward(self, output: ModelForwardOutput, labels: Tensor) -> Tensor:
+    def forward(self, output: ModelForwardOutput, targets: BackboneLossInput) -> Tensor:
+        labels = targets.labels
         cross_entropy = self._cross_entropy_by_time(
             output, labels, label_smoothing=self._label_smoothing
         )
@@ -73,6 +86,24 @@ class AnchoredSampledLoopCrossEntropyLoss(
         sampled_loss = cross_entropy[loop_indices, batch_indices].mean()
         task_loss = cross_entropy[-1].mean() + self._sampled_loss_scale * sampled_loss
 
+        if self._distillation_scale > 0:
+            if targets.teacher_logits is None:
+                raise ValueError(
+                    "teacher_logits are required when distillation_scale is positive"
+                )
+            distances = self._distribution_distances(
+                output["timed_logits"], targets.teacher_logits
+            )
+            sampled_distillation = distances[loop_indices, batch_indices].mean()
+            anchored_distillation = (
+                distances[-1].mean() + self._sampled_loss_scale * sampled_distillation
+            )
+            task_loss = task_loss + (
+                self._distillation_scale
+                * self._teacher_temperature**2
+                * anchored_distillation
+            )
+
         if self._time_rope_regularization_scale == 0:
             return task_loss
         return task_loss + (
@@ -91,3 +122,24 @@ class AnchoredSampledLoopCrossEntropyLoss(
             reduction="none",
             label_smoothing=label_smoothing,
         ).reshape(iterations, -1)
+
+    def _distribution_distances(
+        self, timed_logits: Tensor, teacher_logits: Tensor
+    ) -> Tensor:
+        if timed_logits.ndim != 3:
+            raise ValueError("timed_logits must have shape (loops, samples, classes)")
+        _, samples, classes = timed_logits.shape
+        if teacher_logits.shape != (samples, classes):
+            raise ValueError("teacher_logits must have shape (samples, classes)")
+
+        teacher_log_probability = functional.log_softmax(
+            teacher_logits.float().detach() / self._teacher_temperature, dim=-1
+        )
+        teacher_probability = teacher_log_probability.exp()
+        student_log_probability = functional.log_softmax(
+            timed_logits.float() / self._teacher_temperature, dim=-1
+        )
+        return (
+            teacher_probability.unsqueeze(0)
+            * (teacher_log_probability.unsqueeze(0) - student_log_probability)
+        ).sum(dim=-1)

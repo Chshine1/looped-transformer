@@ -1,16 +1,46 @@
 # Looped Transformer for Natural-Language Inference
 
-This repository studies recurrent-depth computation on MNLI. Two mechanisms are
-treated as independent experimental factors:
+This repository studies whether a recurrent-depth Transformer can learn strong,
+sample-dependent computation trajectories on MNLI and later support causal
+early exit.
 
-1. cross-attention input injection from the recurrent state into the original
-   token embeddings; and
-2. a rotary loop-time representation that places each recurrent step in a
-   distinct internal coordinate frame.
+## Research contract
 
-The model produces a prediction and a halting hazard at every loop. The initial
-experiments test whether these mechanisms improve task learning, create
-iteration-specific computation, and support input-dependent stopping.
+The active work has three ordered goals:
+
+1. Train a strong MNLI backbone whose recurrent loops retain useful
+   sample-dependent trajectories.
+2. After such a backbone exists, train an information-rich offline trajectory
+   teacher over complete trajectories.
+3. Distill that teacher into a causal, one-directional hazard-GRU controller and
+   measure the real accuracy--compute frontier.
+
+The offline trajectory teacher is not an inference controller. It sees future
+states deliberately and cannot itself provide compute savings. No trajectory
+teacher or controller-training path is currently active in the repository; it
+will be introduced only after the backbone is strong enough to justify it.
+
+Loop selection used during backbone training must not depend on the gold label
+or on a teacher's predicted class distribution. A previous experiment did so
+and learned a degenerate depth-to-class code: recurrent depths specialized as
+entailment, contradiction, and neutral predictors. Its label-aware oracle reached
+99.38%, but its shuffled-label oracle also reached 95.99%, while final matched
+accuracy fell to 37.39%. This establishes a permanent control requirement:
+oracle lift over shuffled labels, fixed-loop accuracy, per-loop class
+histograms, and confidence must all remain healthy.
+
+External semantic distillation may augment the anchored backbone objective, but
+it must not replace the final-loop anchor or act as a halting or loop-selection
+signal. A discarded unanchored continuation run produced another class cycle:
+97.35% label-aware oracle but 87.65% shuffled-label oracle and only 48.12%
+final matched accuracy.
+
+Anchored logit distillation avoided that collapse but did not establish a clear
+gain over CE-only training. Its six-epoch run reached 66.17% matched accuracy
+while opening a 6.87-point sampled-train gap; validation cross-entropy was best
+at epoch 3 and worsened thereafter. The active experiment therefore returns to
+CE-only training and tests pretrained lexical initialization instead of another
+halting or logit-routing objective.
 
 ## Model
 
@@ -20,15 +50,85 @@ entering loop $t$. For $t>0$, the original input is injected by
 $$\widetilde H_t = H_t + a\,g\odot \operatorname{MHA}(Q=H_t, K=E, V=E; M),$$
 
 where $g\in\mathbb{R}^d$ is a learned zero-initialized gate and $M$ is the
-key-padding mask. Thus injection is cross-attention, not direct embedding
-addition. Two shared Transformer blocks then update the state. The current warmup
-uses the same static coefficient for injection and every attention/FFN residual:
+key-padding mask. Two shared Transformer blocks update the recurrent state. A
+rotary loop-time representation places each recurrent step in a distinct
+internal coordinate frame.
 
-$$a=\frac{\lambda}{N_{\rm ref}\sqrt{2}}=\frac{1}{6\sqrt{2}}\approx0.11785.$$
+Input word and premise/hypothesis segment embeddings are initialized from the
+pinned `google-bert/bert-base-uncased` checkpoint. A reproducible rank-256 PCA
+basis is fitted to its 768-dimensional word embeddings; both word and segment
+embeddings are projected through that shared basis. BERT absolute position
+embeddings are not imported because this model retains rotary position encoding.
 
-The reference iteration count is a fixed configuration value, not an estimate
-from the controller. Static mode has no trainable gamma. The historical geometric
-mode remains available for old checkpoints.
+The current static residual coefficient is
+
+$$a=\frac{1}{6\sqrt{2}}\approx0.11785.$$
+
+## Active experiments
+
+### Anchored backbone training
+
+The active six-epoch backbone configuration is `conf/stage/backbone.yaml`. Its
+primary objective is unchanged:
+
+$$L_{\mathrm{CE}} = \operatorname{CE}(z_6,y)
++ 0.2\operatorname{CE}(z_s,y),\qquad s\sim\operatorname{Uniform}\{3,4,5\}.$$
+
+The last loop therefore remains the anchor, while one earlier loop per sample
+receives weaker direct supervision. External NLI distillation is disabled in
+the active configuration so that this run isolates pretrained input
+initialization. The first fresh training run loads the pinned BERT embedding
+source, caches its projected matrices under `data/pretrained-embedding-cache`,
+and records all source and PCA settings in the artifact manifest. Evaluation
+and checkpoint resume use saved student weights and do not repeat PCA.
+
+```bash
+pixi run -e fallback looped-transformer --config-dir conf train
+```
+
+### External semantic distillation
+
+The same training run can add frozen NLI-teacher KL at the final loop and at
+the same sampled earlier loop:
+
+$$L = L_{\mathrm{CE}} + \lambda T^2\left[
+D_{\mathrm{KL}}(q_T\Vert p_{6,T})
++0.2D_{\mathrm{KL}}(q_T\Vert p_{s,T})\right].$$
+
+The optional external model is `cross-encoder/nli-deberta-v3-base`. Set
+`training.stage.loss_options.distillation_scale` above zero to enable this
+term. At the active zero weight, the external NLI tokenizer and model are not
+loaded and teacher inference is skipped entirely.
+
+Runs with NLI logit distillation use external pretrained and task-finetuned
+knowledge and must be described accordingly. The active CE-only run still uses
+external self-supervised BERT input embeddings and must not be described as
+MNLI-only learning from scratch.
+
+## Evaluation
+
+```bash
+pixi run -e fallback looped-transformer --config-dir conf eval \
+  --checkpoint /absolute/path/to/checkpoint.pt \
+  --data-file data/mnli_matched.tsv \
+  --batch-size 64 \
+  --output-dir outputs/evaluation \
+  --summary-only
+```
+
+Evaluation reports:
+
+- final, mean, and per-loop accuracy and cross-entropy;
+- true-label probability and prediction confidence by loop;
+- confidence split between correct and incorrect predictions;
+- adjacent prediction changes, rescues, and harms;
+- best fixed loop and label-aware per-sample oracle;
+- repeated shuffled-label oracle and genuine oracle lift;
+- per-loop preferred-depth and class histograms.
+
+A checkpoint is not useful merely because its label-aware oracle is high.
+Shuffled-oracle performance and class histograms must rule out label-to-depth
+coding, and fixed-loop task performance must remain competitive.
 
 ## Reproducibility
 
@@ -37,159 +137,26 @@ The project uses `pixi` and Python 3.12 or newer.
 ```powershell
 pixi run test
 pixi run typecheck
-pixi run train
+pixi run format
 ```
 
-Training is configuration-driven and produces one artifact for one stage. The
-default stage retrains the backbone for six epochs in FP32 with batch size 200.
-To continue an interrupted run, put the checkpoint in the composed
-configuration rather than passing state to the trainer:
-
-```bash
-pixi run looped-transformer --config-dir conf \
-  --override training.resume_from=/absolute/path/to/checkpoint-epoch-2.pt \
-  train
-```
-
-The artifact identity includes the resolved stage configuration, the resume
-checkpoint fingerprint, and (for a controller teacher) the backbone source
-checkpoint fingerprint. A controller teacher run can therefore be selected
-with only the differing Hydra overrides:
-
-```bash
-pixi run looped-transformer --config-dir conf \
-  --override stage=controller_teacher \
-  --override training.stage.source_checkpoint=/absolute/path/to/backbone.pt \
-  train
-```
-
-On a 24 GiB RTX 4090, controller collection uses backbone batches of 200 but
-slices each collected trajectory into teacher microbatches of 40. Five-way
-gradient accumulation retains an effective batch size of 200. For six loops,
-sequence length 128, and hidden dimension 256, one collected FP32 trajectory is
-about 150 MiB; a teacher microbatch is about 30 MiB before activations. The
-default one-epoch teacher schedule performs about 1,964 frozen-backbone forwards,
-9,818 teacher microsteps, and 1,964 optimizer steps on the full MNLI training
-set. In practice, budget roughly one to two backbone-training epochs per teacher
-run; the three teachers add approximately 50--100% to the six-epoch backbone
-run. Actual wall time depends strongly on tokenization and CUDA kernel throughput.
-
-The controller teacher is a soft, full-trajectory depth teacher. It predicts
-each loop's correctness independently with one smoothed BCE objective, avoiding
-the false requirement that exactly one loop must be correct. During guided
-backbone training, those correctness scores are converted into a moderately
-focused distribution, blurred across neighboring loops and mixed with a uniform
-floor. Because its bidirectional GRU consumes the complete trajectory, it can
-guide later backbone refinement but does not itself provide online early-exit
-compute savings.
-
-Run the complete backbone plus epoch-2, epoch-3, and epoch-6 teacher sequence on
-Ubuntu with:
-
-```bash
-bash scripts/train_backbone_and_teachers.sh
-```
-
-For alternating training, first reserve a deterministic 4,000-example slice of
-matched validation for cycle selection. The untouched remainder and mismatched
-validation are used only for final comparisons:
-
-```powershell
-python scripts/split_mnli_cycle_data.py
-```
-
-Run the full gated controller/backbone alternation from the chosen (normally
-epoch-2) backbone checkpoint:
-
-```bash
-bash scripts/run_alternating_training.sh \
-  outputs/<run>/<artifact>/backbone_warmup/checkpoint-epoch-2.pt 1
-```
-
-Each cycle trains a one-epoch controller with smoothed per-loop correctness BCE,
-evaluates it on both sampled training data and `data/mnli_cycle_dev.tsv`, and
-rejects controllers that are uninformative, nearly uniform, over-confident, or
-worse than the final loop. Controller sigmoid scores are converted to soft loop
-weights with moderate temperature sharpening, neighboring-loop smoothing, and a
-uniform floor. The guided stage freezes the controller, detaches those weights,
-removes the final-loop anchor, and saves a plain backbone-compatible checkpoint.
-The new backbone must also preserve cycle-dev accuracy and cross-entropy before
-it becomes the source for the next cycle. Final matched and mismatched holdouts
-remain untouched by cycle selection.
-
-To run just the guided stage manually:
-
-```powershell
-pixi run looped-transformer --config-dir conf `
-  --override stage=guided_backbone `
-  --override training.stage.source_checkpoint=outputs/<backbone>.pt `
-  --override training.stage.controller_checkpoint=outputs/<controller>.pt `
-  --override checkpoint.output_dir=outputs/guided-backbone-cycle-1 `
-  train
-```
+Training artifacts record the resolved model, stage, runtime configuration, and
+resume-checkpoint fingerprint. Use a distinct output directory for each run.
 
 ## Project structure
 
-The codebase is organized as a modular monolith with a one-way dependency graph:
-
-- `looped_transformer.core` contains domain-independent contracts,
-  checkpointing, training/evaluation infrastructure, PyTorch extensions, and
-  reusable neural-network components;
-- `looped_transformer.domains.mnli` contains the complete MNLI vertical slice;
-- `looped_transformer.app` is the configuration, dependency-injection, and CLI
-  composition root.
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the dependency rules, guidance for
-adding another training domain, and when it would be worthwhile to split this
-distribution into a multi-project Python workspace.
-
-## Evaluation
-
-Evaluation is composed from an inference runner and an evaluation policy. The
-built-in `LoopDiagnosticsPolicy` treats the final-loop score as the deployable
-warmup metric, while emphasizing whether the backbone exposes useful stopping
-opportunities elsewhere in the trajectory. It compares the label-aware
-per-sample oracle with both the best fixed loop and a repeated shuffled-label
-oracle, and records rescue rates, preferred-loop histograms, prediction changes,
-and per-loop class histograms. The oracle measures backbone headroom; it is not
-an estimate of an untrained controller's performance.
-
-```powershell
-python -m looped_transformer.main --config-dir conf eval `
-  --checkpoint outputs/<run>/<checkpoint>.pt `
-  --data-file data/mnli_matched.tsv --batch-size 64 `
-  --output-dir outputs/<run>/evaluation
-```
-
-The output directory contains `batches.jsonl` with one structured record per
-batch and `summary.json` with the final result and aggregate diagnostics. If
-`--output-dir` is omitted, the files are written to an `evaluation` directory
-beside the checkpoint.
-
-Use a distinct `--output-dir` for each checkpoint/dataset combination; evaluation
-replaces logs in that directory. The default dataset is matched validation.
-To compare every warmup checkpoint on sampled training and matched validation
-using the configuration recorded in `artifact.json`:
-
-```powershell
-python scripts/checkpoint_depth_sweep.py --run-dir outputs/<run>
-python scripts/summarize_depth_sweep.py outputs/<run>/depth_analysis
-```
-
-The sweep saves aggregate JSON diagnostics and per-example logits/labels under
-`depth_analysis`. Existing trajectory caches are reused; use a fresh directory
-or remove the corresponding cache if the dataset or evaluation implementation
-changes. `--splits train_sample matched mismatched` includes both validation sets.
-The additional diagnostics compare all loops with supervised loops 3–6 and
-include causal confidence-threshold baselines.
+- `looped_transformer.core`: training, evaluation, checkpointing, and reusable
+  PyTorch infrastructure.
+- `looped_transformer.domains.mnli`: MNLI model, data, losses, stages, and
+  trajectory diagnostics.
+- `looped_transformer.app`: configuration, dependency injection, and CLI.
 
 ## Scope
 
-The initial claim is comparative rather than architectural novelty. Required
-comparisons are fixed-depth versus adaptive-depth execution, and ablations of
-cross-attention injection and rotary loop-time encoding. Attention weights alone
-are not treated as explanations; analysis must include prediction trajectories,
-representation measurements, and causal interventions.
+The eventual comparisons are fixed-depth versus adaptive-depth execution and
+ablations of cross-attention input injection and rotary loop-time encoding.
+Attention weights alone are not treated as explanations; analysis must include
+prediction trajectories, representation measurements, and causal interventions.
 
 ## Prior work
 

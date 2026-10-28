@@ -1,6 +1,5 @@
 from lagom import Container, Singleton
 from lagom.interfaces import ReadableContainer
-from torch import Tensor
 
 from looped_transformer.app.config import AppOptions
 from looped_transformer.core.artifacts import ArtifactSpec, get_file_fingerprint
@@ -21,13 +20,13 @@ from looped_transformer.core.training.stage import TrainingOptions
 from looped_transformer.core.training.training_stage_registry import (
     TrainingStageRegistry,
 )
-from looped_transformer.domains.controller_teacher.controller_teacher import (
-    ControllerTeacherOptions,
-)
 from looped_transformer.domains.mnli.config.options import LoopOptions
 from looped_transformer.domains.mnli.evaluation.evaluation import EvaluationOptions
 from looped_transformer.domains.mnli.evaluation.loop_diagnostics import (
     LoopDiagnosticsOptions,
+)
+from looped_transformer.domains.mnli.modules.anchored_sampled_ce_loss import (
+    BackboneLossInput,
 )
 from looped_transformer.domains.mnli.modules.model import ModelOptions
 from looped_transformer.domains.mnli.services.data_provider import MNLIDataOptions
@@ -51,13 +50,9 @@ def build_container(options: AppOptions) -> Container:
         "tokenizer": options.tokenizer,
         "stage": options.training.stage,
         "resume_from": _checkpoint_reference(options.training.resume_from),
-        "stage_source": _stage_source_reference(options.training.stage),
     }
-    controller_source = options.training.stage.get("controller_checkpoint")
-    if controller_source is not None:
-        artifact_values["controller_source"] = _checkpoint_reference(controller_source)
     container[ArtifactSpec] = ArtifactSpec(
-        format="looped-transformer-training-v2",
+        format="looped-transformer-training",
         values=artifact_values,
     )
     container[CheckpointSavingOptions] = options.checkpoint
@@ -65,24 +60,18 @@ def build_container(options: AppOptions) -> Container:
     container[SequenceOptions] = options.tokenizer.sequence
     container[ModelOptions] = options.model
     container[LoopOptions] = options.model.loop
-    container[ControllerTeacherOptions] = ControllerTeacherOptions(
-        model_dimension=options.model.hidden_state_dimension,
-        ffn_dimension=options.model.transformer.gelu_ffn_dimension,
-        heads_count=options.model.transformer.attention_heads_count,
-        dropout=options.model.dropout.controller,
-    )
     container[DeviceOptions] = options.runtime.device
     container[PrecisionOptions] = options.runtime.precision
     container[ReproducibilityOptions] = options.runtime.reproducibility
     container[TrainingRuntimeOptions] = options.runtime.training
     container[TrainingOptions] = options.training
-    stage_registry = TrainingStageRegistry[MNLIBatch, ModelForwardOutput, Tensor](
-        options.training
-    )
+    stage_registry = TrainingStageRegistry[
+        MNLIBatch, ModelForwardOutput, BackboneLossInput
+    ](options.training)
     register_looped_mnli_stage_template(stage_registry)
-    container[TrainingStageRegistry[MNLIBatch, ModelForwardOutput, Tensor]] = (
-        stage_registry
-    )
+    container[
+        TrainingStageRegistry[MNLIBatch, ModelForwardOutput, BackboneLossInput]
+    ] = stage_registry
     container[CheckpointLoader] = CheckpointLoader
     container[CheckpointSaver] = CheckpointSaver
     container[MNLITokenizer] = Singleton(_build_tokenizer)
@@ -112,8 +101,3 @@ def _checkpoint_reference(path) -> dict | None:
         "path": str(path),
         "fingerprint": get_file_fingerprint(path),
     }
-
-
-def _stage_source_reference(stage: dict) -> dict | None:
-    source = stage.get("source_checkpoint")
-    return _checkpoint_reference(source)
