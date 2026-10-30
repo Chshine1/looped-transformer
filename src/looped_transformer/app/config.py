@@ -8,8 +8,8 @@ from looped_transformer.core.checkpointing.saver import CheckpointSavingOptions
 from looped_transformer.core.config.base import OptionsModel
 from looped_transformer.core.config.runtime import RuntimeOptions
 from looped_transformer.core.training.stage import TrainingOptions
-from looped_transformer.domains.mnli.modules.model import ModelOptions
-from looped_transformer.domains.mnli.services.tokenizer import TokenizerOptions
+from looped_transformer.domains.text_classification.model import ModelOptions
+from looped_transformer.domains.text_classification.tokenizer import TokenizerOptions
 
 
 class AppOptions(OptionsModel):
@@ -23,13 +23,14 @@ class AppOptions(OptionsModel):
 def load_options(
     config_dir: str,
     overrides: list[str],
+    config_name: str = "config",
 ) -> AppOptions:
     with initialize_config_dir(
         version_base=None,
         config_dir=str(Path(config_dir).resolve()),
     ):
         config: DictConfig = compose(
-            config_name="config",
+            config_name=config_name,
             overrides=overrides,
         )
 

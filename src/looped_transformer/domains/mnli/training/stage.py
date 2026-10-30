@@ -16,11 +16,6 @@ from looped_transformer.core.training.stage import StageTemplate
 from looped_transformer.core.training.training_stage_registry import (
     TrainingStageRegistry,
 )
-from looped_transformer.domains.mnli.modules.anchored_sampled_ce_loss import (
-    AnchoredSampledLoopCrossEntropyLoss,
-    AnchoredSampledLoopLossOptions,
-    BackboneLossInput,
-)
 from looped_transformer.domains.mnli.services.data_provider import (
     MNLIDataOptions,
     MNLIDataProvider,
@@ -29,7 +24,12 @@ from looped_transformer.domains.mnli.training.backbone_collator import (
     ExternalTeacherOptions,
 )
 from looped_transformer.domains.mnli.types.batch import MNLIBatch
-from looped_transformer.domains.mnli.types.model import ModelForwardOutput
+from looped_transformer.domains.text_classification.loss import (
+    AnchoredSampledLoopCrossEntropyLoss,
+    AnchoredSampledLoopLossOptions,
+    BackboneLossInput,
+)
+from looped_transformer.domains.text_classification.types import ModelForwardOutput
 from looped_transformer.utils.torch.optim import AdamWOptions, create_adam_w_optimizer
 from looped_transformer.utils.torch.schedulers import SchedulerOptions, create_scheduler
 

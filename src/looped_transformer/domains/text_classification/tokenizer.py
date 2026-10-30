@@ -10,7 +10,7 @@ from transformers.utils import PaddingStrategy
 
 from looped_transformer.core.config.base import NonEmptyString, OptionsModel
 from looped_transformer.core.config.sequence import SequenceOptions
-from looped_transformer.domains.mnli.types.tokenizer import (
+from looped_transformer.domains.text_classification.tokenizer_types import (
     TokenizeResult,
     TokenizerInfo,
 )
@@ -25,7 +25,7 @@ class TokenizerOptions(OptionsModel):
     sequence: SequenceOptions
 
 
-class MNLITokenizer:
+class PairTokenizer:
     def __init__(self, options: TokenizerOptions) -> None:
         self._max_sequence_length = options.sequence.max_sequence_length
         self._revision = options.source.revision

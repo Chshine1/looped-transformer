@@ -34,14 +34,14 @@ from looped_transformer.core.modules.timed_rope import (
     TimedMultiHeadRoPECache,
     TimedRoPEOptions,
 )
-from looped_transformer.domains.mnli.config.options import LoopOptions
-from looped_transformer.domains.mnli.modules.halting_cell import (
+from looped_transformer.domains.text_classification.config.options import LoopOptions
+from looped_transformer.domains.text_classification.halting_cell import (
     HaltingCell,
     HaltingCellOptions,
     HaltingResult,
 )
-from looped_transformer.domains.mnli.types.model import ModelForwardOutput
-from looped_transformer.domains.mnli.types.tokenizer import TokenizerInfo
+from looped_transformer.domains.text_classification.tokenizer_types import TokenizerInfo
+from looped_transformer.domains.text_classification.types import ModelForwardOutput
 from looped_transformer.utils.torch.functional import apply_rotary
 
 
@@ -114,7 +114,9 @@ class LoopModuleOptions(OptionsModel):
     max_iterations: PositiveInt
 
 
-class LoopedMNLI(nn.Module, IModule[Tensor, Tensor, Tensor, ModelForwardOutput]):
+class LoopedTextClassifier(
+    nn.Module, IModule[Tensor, Tensor, Tensor, ModelForwardOutput]
+):
     class _MultiHeadRotation(nn.Module):
         _timed_rope_cache: TimedMultiHeadRoPECache
 
@@ -170,7 +172,7 @@ class LoopedMNLI(nn.Module, IModule[Tensor, Tensor, Tensor, ModelForwardOutput])
                 block_options,
             )
             self._loop_normalization = nn.RMSNorm(dim)
-            self._rotation = LoopedMNLI._MultiHeadRotation(
+            self._rotation = LoopedTextClassifier._MultiHeadRotation(
                 timed_rope_cache,
                 MultiHeadRotationOptions(heads_count=block_options.heads_count),
             )

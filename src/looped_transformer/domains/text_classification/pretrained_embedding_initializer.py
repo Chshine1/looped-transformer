@@ -8,8 +8,11 @@ from torch import Tensor
 from transformers import BertModel
 
 from looped_transformer.core.artifacts import get_artifact_id
-from looped_transformer.domains.mnli.modules.model import LoopedMNLI, ModelOptions
-from looped_transformer.domains.mnli.types.tokenizer import TokenizerInfo
+from looped_transformer.domains.text_classification.model import (
+    LoopedTextClassifier,
+    ModelOptions,
+)
+from looped_transformer.domains.text_classification.tokenizer_types import TokenizerInfo
 
 _ALGORITHM_VERSION = "bert-input-pca-v1"
 
@@ -47,7 +50,7 @@ def project_input_embeddings(
 
 
 def initialize_pretrained_input_embeddings(
-    model: LoopedMNLI,
+    model: LoopedTextClassifier,
     tokenizer_info: TokenizerInfo,
     options: ModelOptions._PretrainedEmbeddingOptions,
     segment_types_count: int,

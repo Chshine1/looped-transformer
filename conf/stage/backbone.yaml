@@ -1,9 +1,9 @@
 # @package training.stage
 
-id: backbone_warmup
-type: looped_mnli
+id: clutrr_v1_3_backbone
+type: looped_clutrr
 options:
-  epochs: 6
+  epochs: 12
   frozen_patterns: '^_halting_cell\.'
   evaluation_patterns: '^_halting_cell(?:\.|$)'
   max_gradient_norm: 1.0
@@ -11,21 +11,9 @@ options:
   save_every_epochs: 1
 data_options:
   seed: 42
-  file_path: data/mnli_train.tsv
-  batch_size: 200
-  premise_column: sentence1
-  hypothesis_column: sentence2
-  label_column: gold_label
-  shuffle_cache_dir: data/shuffled
-  shuffle_chunk_size: 10000
-teacher:
-  pretrained_model: cross-encoder/nli-deberta-v3-base
-  revision: main
-  max_sequence_length: 128
-  dtype: float16
-  local_files_only: false
-  # Raw external-model logit order before conversion to the project order.
-  label_order: [ contradiction, entailment, neutral ]
+  file_path: data/clutrr-v1.3/train.jsonl
+  manifest_path: data/clutrr-v1.3/manifest.json
+  batch_size: 96
 loss_options:
   type: anchored_sampled_loop_cross_entropy
   sampled_loops: [ 3, 4, 5 ]
@@ -33,7 +21,7 @@ loss_options:
   sampled_loss_scale: 0.20
   label_smoothing: 0.05
   time_rope_regularization_scale: 0.01
-  # Set to 0 to skip loading and running the external teacher entirely.
+  # External NLI distillation is intentionally unavailable for CLUTRR.
   distillation_scale: 0.0
   teacher_temperature: 2.0
 optimizer_options:

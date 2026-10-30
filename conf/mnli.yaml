@@ -1,0 +1,4 @@
+defaults:
+  - base
+  - stage: mnli
+  - _self_

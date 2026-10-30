@@ -20,25 +20,30 @@ from looped_transformer.core.training.stage import TrainingOptions
 from looped_transformer.core.training.training_stage_registry import (
     TrainingStageRegistry,
 )
-from looped_transformer.domains.mnli.config.options import LoopOptions
+from looped_transformer.domains.clutrr.data_provider import CLUTRRDataOptions
+from looped_transformer.domains.clutrr.stage import (
+    register_looped_clutrr_stage_template,
+)
+from looped_transformer.domains.clutrr.types import CLUTRRBatch
 from looped_transformer.domains.mnli.evaluation.evaluation import EvaluationOptions
-from looped_transformer.domains.mnli.evaluation.loop_diagnostics import (
-    LoopDiagnosticsOptions,
-)
-from looped_transformer.domains.mnli.modules.anchored_sampled_ce_loss import (
-    BackboneLossInput,
-)
-from looped_transformer.domains.mnli.modules.model import ModelOptions
 from looped_transformer.domains.mnli.services.data_provider import MNLIDataOptions
-from looped_transformer.domains.mnli.services.tokenizer import (
-    MNLITokenizer,
-    TokenizerOptions,
-)
 from looped_transformer.domains.mnli.training.stage import (
     register_looped_mnli_stage_template,
 )
 from looped_transformer.domains.mnli.types.batch import MNLIBatch
-from looped_transformer.domains.mnli.types.model import ModelForwardOutput
+from looped_transformer.domains.text_classification.config.options import LoopOptions
+from looped_transformer.domains.text_classification.loop_diagnostics import (
+    LoopDiagnosticsOptions,
+)
+from looped_transformer.domains.text_classification.loss import (
+    BackboneLossInput,
+)
+from looped_transformer.domains.text_classification.model import ModelOptions
+from looped_transformer.domains.text_classification.tokenizer import (
+    PairTokenizer,
+    TokenizerOptions,
+)
+from looped_transformer.domains.text_classification.types import ModelForwardOutput
 
 
 def build_container(options: AppOptions) -> Container:
@@ -72,9 +77,16 @@ def build_container(options: AppOptions) -> Container:
     container[
         TrainingStageRegistry[MNLIBatch, ModelForwardOutput, BackboneLossInput]
     ] = stage_registry
+    clutrr_stage_registry = TrainingStageRegistry[
+        CLUTRRBatch, ModelForwardOutput, BackboneLossInput
+    ](options.training)
+    register_looped_clutrr_stage_template(clutrr_stage_registry)
+    container[
+        TrainingStageRegistry[CLUTRRBatch, ModelForwardOutput, BackboneLossInput]
+    ] = clutrr_stage_registry
     container[CheckpointLoader] = CheckpointLoader
     container[CheckpointSaver] = CheckpointSaver
-    container[MNLITokenizer] = Singleton(_build_tokenizer)
+    container[PairTokenizer] = Singleton(_build_tokenizer)
     container[ModelTrainerFactory] = Singleton(ModelTrainerFactory)
     return container
 
@@ -90,8 +102,25 @@ def configure_evaluation(container: Container, options: EvaluationOptions) -> Co
     return evaluation_container
 
 
-def _build_tokenizer(container: ReadableContainer) -> MNLITokenizer:
-    return MNLITokenizer(container[TokenizerOptions])
+def configure_clutrr_evaluation(
+    container: Container,
+    checkpoint: EvaluationCheckpointOptions,
+    output: EvaluationOutputOptions,
+    diagnostics: LoopDiagnosticsOptions,
+    data: CLUTRRDataOptions,
+) -> Container:
+    evaluation_container = container.clone()
+    evaluation_container[EvaluationCheckpointOptions] = checkpoint
+    evaluation_container[EvaluationOutputOptions] = output
+    evaluation_container[LoopDiagnosticsOptions] = diagnostics
+    evaluation_container[CLUTRRDataOptions] = data
+    evaluation_container[StructuralLogger] = Singleton(StructuralLogger)
+    evaluation_container[EvaluatorFactory] = Singleton(EvaluatorFactory)
+    return evaluation_container
+
+
+def _build_tokenizer(container: ReadableContainer) -> PairTokenizer:
+    return PairTokenizer(container[TokenizerOptions])
 
 
 def _checkpoint_reference(path) -> dict | None:

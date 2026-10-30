@@ -13,12 +13,12 @@ from looped_transformer.core.config.base import (
     OptionsModel,
     PositiveInt,
 )
-from looped_transformer.domains.mnli.modules.anchored_sampled_ce_loss import (
-    BackboneLossInput,
-)
-from looped_transformer.domains.mnli.services.tokenizer import MNLITokenizer
 from looped_transformer.domains.mnli.types.batch import MNLIBatch
 from looped_transformer.domains.mnli.types.logic_relation import LogicRelation
+from looped_transformer.domains.text_classification.loss import (
+    BackboneLossInput,
+)
+from looped_transformer.domains.text_classification.tokenizer import PairTokenizer
 from looped_transformer.utils.pydantic import TorchDType
 
 
@@ -44,7 +44,7 @@ class BackboneTrainingCollator(
 ):
     def __init__(
         self,
-        student_tokenizer: MNLITokenizer,
+        student_tokenizer: PairTokenizer,
         teacher_options: ExternalTeacherOptions,
         distillation_scale: NonNegativeFloat,
         device: torch.device,

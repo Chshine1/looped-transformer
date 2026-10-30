@@ -2,3 +2,11 @@ defaults:
   - base
   - stage: backbone
   - _self_
+
+# The active experiment is corrected CLUTRR v1.3 relation classification.
+tokenizer:
+  sequence:
+    max_sequence_length: 256
+
+model:
+  output_classes_count: 18

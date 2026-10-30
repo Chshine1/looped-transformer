@@ -4,13 +4,13 @@ import torch
 from torch import Tensor
 
 from looped_transformer.core.abstractions.training import ModelTrainingCollator
-from looped_transformer.domains.mnli.services.tokenizer import MNLITokenizer
 from looped_transformer.domains.mnli.types.batch import MNLIBatch
 from looped_transformer.domains.mnli.types.logic_relation import LogicRelation
+from looped_transformer.domains.text_classification.tokenizer import PairTokenizer
 
 
 class MNLICollator(ModelTrainingCollator[MNLIBatch, Tensor, Tensor, Tensor, Tensor]):
-    def __init__(self, tokenizer: MNLITokenizer):
+    def __init__(self, tokenizer: PairTokenizer):
         self._tokenizer = tokenizer
 
     @override

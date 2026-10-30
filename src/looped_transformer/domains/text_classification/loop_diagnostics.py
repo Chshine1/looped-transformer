@@ -1,5 +1,6 @@
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, override
+from typing import Any, Protocol, override
 
 import torch
 from torch import Tensor
@@ -15,10 +16,9 @@ from looped_transformer.core.config.base import (
 from looped_transformer.core.config.runtime import DeviceOptions
 from looped_transformer.core.evaluation import EvaluationPolicy
 from looped_transformer.core.logging import StructuralLogger
-from looped_transformer.domains.mnli.config.options import LoopOptions
-from looped_transformer.domains.mnli.types.batch import MNLIBatch
 from looped_transformer.domains.mnli.types.logic_relation import LogicRelation
-from looped_transformer.domains.mnli.types.model import ModelForwardOutput
+from looped_transformer.domains.text_classification.config.options import LoopOptions
+from looped_transformer.domains.text_classification.types import ModelForwardOutput
 
 
 class LoopDiagnosticsOptions(OptionsModel):
@@ -42,6 +42,12 @@ class BatchDiagnostics:
     per_loop: dict[str, list[float] | list[int]]
     prediction_trajectory: dict[str, list[float]]
     class_histograms: dict[str, list[int] | list[list[int]]]
+    reasoning_depth: dict[str, Any] | None = None
+
+
+class LabeledBatch(Protocol):
+    @property
+    def labels(self) -> tuple[str, ...]: ...
 
 
 @dataclass(slots=True)
@@ -69,7 +75,7 @@ class _MetricTotals:
 
 
 class LoopDiagnosticsPolicy(
-    EvaluationPolicy[MNLIBatch, Tensor, Tensor, Tensor, ModelForwardOutput]
+    EvaluationPolicy[LabeledBatch, Tensor, Tensor, Tensor, ModelForwardOutput]
 ):
     _target_histogram: Tensor | None
     _final_prediction_histogram: Tensor | None
@@ -81,6 +87,8 @@ class LoopDiagnosticsPolicy(
         device_options: DeviceOptions,
         options: LoopDiagnosticsOptions,
         logger: StructuralLogger,
+        label_to_index: Callable[[str], int] | None = None,
+        classes_count: int | None = None,
     ) -> None:
         self._max_iterations = loop_options.max_iterations
         self._device = device_options.device
@@ -88,6 +96,10 @@ class LoopDiagnosticsPolicy(
         self._shuffle_oracle_repeats = options.shuffle_oracle_repeats
         self._shuffle_seed = options.shuffle_seed
         self._logger = logger
+        self._label_to_index = label_to_index or (
+            lambda label: LogicRelation.from_string(label).value
+        )
+        self._classes_count = classes_count
         self._initialize_state()
 
     def _initialize_state(self) -> None:
@@ -152,6 +164,11 @@ class LoopDiagnosticsPolicy(
         self._target_histogram: Tensor | None = None
         self._final_prediction_histogram: Tensor | None = None
         self._per_loop_prediction_histogram: Tensor | None = None
+        self._depth_counts: dict[int, int] = {}
+        self._depth_raw_cross_entropy: dict[int, Tensor] = {}
+        self._depth_correct: dict[int, Tensor] = {}
+        self._depth_stable_loop_histogram: dict[int, Tensor] = {}
+        self._depth_target_histogram: dict[int, Tensor] = {}
 
     @override
     def reset(
@@ -207,6 +224,13 @@ class LoopDiagnosticsPolicy(
             )
         if timed_logits.size(2) <= 1:
             raise ValueError("timed_logits must contain at least two classes")
+        if (
+            self._classes_count is not None
+            and timed_logits.size(2) != self._classes_count
+        ):
+            raise ValueError(
+                f"Expected {self._classes_count} classes, got {timed_logits.size(2)}"
+            )
         if not torch.isfinite(timed_logits).all():
             raise ValueError("timed_logits contains non-finite values")
 
@@ -244,13 +268,13 @@ class LoopDiagnosticsPolicy(
         )
 
     @override
-    def attend_batch(self, batch: MNLIBatch, output: ModelForwardOutput) -> None:
+    def attend_batch(self, batch: LabeledBatch, output: ModelForwardOutput) -> None:
         timed_logits = output["timed_logits"].float()
         self._validate_output(timed_logits)
         loop_count, sample_count, class_count = timed_logits.shape
 
         labels = torch.tensor(
-            [LogicRelation.from_string(label).value for label in batch.labels],
+            [self._label_to_index(label) for label in batch.labels],
             dtype=torch.long,
             device=timed_logits.device,
         )
@@ -272,6 +296,61 @@ class LoopDiagnosticsPolicy(
             -1
         )
         prediction_confidence = probabilities_by_loop.max(dim=-1).values
+
+        depths = getattr(batch, "depths", None)
+        batch_depth_metrics: dict[str, Any] | None = None
+        if depths is not None:
+            if len(depths) != sample_count:
+                raise ValueError("Reasoning-depth count does not match batch size")
+            depth_tensor = torch.tensor(depths, device=timed_logits.device)
+            suffix_correct = torch.flip(
+                torch.cumprod(
+                    torch.flip(correct_by_loop.to(torch.int64), dims=(0,)), dim=0
+                ),
+                dims=(0,),
+            ).bool()
+            has_stable_loop = suffix_correct.any(dim=0)
+            stable_loop = suffix_correct.to(torch.int64).argmax(dim=0)
+            stable_loop = stable_loop.masked_fill(~has_stable_loop, loop_count)
+            batch_depth_metrics = {}
+            for depth in sorted(set(depths)):
+                mask = depth_tensor == depth
+                count = int(mask.sum().item())
+                depth_raw = raw_by_loop[:, mask].sum(dim=1)
+                depth_correct = correct_by_loop[:, mask].sum(dim=1)
+                stable_histogram = torch.bincount(
+                    stable_loop[mask], minlength=loop_count + 1
+                )
+                target_histogram_at_depth = torch.bincount(
+                    labels[mask], minlength=class_count
+                )
+                self._depth_counts[depth] = self._depth_counts.get(depth, 0) + count
+                self._depth_raw_cross_entropy.setdefault(
+                    depth, torch.zeros(loop_count, device=timed_logits.device)
+                ).add_(depth_raw)
+                self._depth_correct.setdefault(
+                    depth, torch.zeros(loop_count, device=timed_logits.device)
+                ).add_(depth_correct)
+                self._depth_stable_loop_histogram.setdefault(
+                    depth,
+                    torch.zeros(
+                        loop_count + 1, dtype=torch.long, device=timed_logits.device
+                    ),
+                ).add_(stable_histogram)
+                self._depth_target_histogram.setdefault(
+                    depth,
+                    torch.zeros(
+                        class_count, dtype=torch.long, device=timed_logits.device
+                    ),
+                ).add_(target_histogram_at_depth)
+                batch_depth_metrics[str(depth)] = {
+                    "sample_count": count,
+                    "accuracy_by_loop": self._round_values(
+                        correct_by_loop[:, mask].float().mean(dim=1)
+                    ),
+                    "stable_loop_histogram": stable_histogram.cpu().tolist(),
+                    "target_histogram": target_histogram_at_depth.cpu().tolist(),
+                }
 
         final_raw = raw_by_loop[-1]
         final_smooth = smooth_by_loop[-1]
@@ -471,6 +550,7 @@ class LoopDiagnosticsPolicy(
                 "final_prediction": final_histogram.cpu().tolist(),
                 "prediction_by_loop": per_loop_histogram.cpu().tolist(),
             },
+            reasoning_depth=batch_depth_metrics,
         )
         self._logger.log_batch_evaluation(batch_diagnostics)
 
@@ -526,6 +606,30 @@ class LoopDiagnosticsPolicy(
         assert self._target_histogram is not None
         assert self._final_prediction_histogram is not None
         assert self._per_loop_prediction_histogram is not None
+
+        depth_metrics = {}
+        for depth, count in sorted(self._depth_counts.items()):
+            histogram = self._depth_stable_loop_histogram[depth]
+            resolved = histogram[:-1].sum().item()
+            weighted_loop_sum = sum(
+                (index + 1) * value
+                for index, value in enumerate(histogram[:-1].cpu().tolist())
+            )
+            depth_metrics[str(depth)] = {
+                "sample_count": count,
+                "raw_cross_entropy_by_loop": self._round_values(
+                    self._depth_raw_cross_entropy[depth] / count
+                ),
+                "accuracy_by_loop": self._round_values(
+                    self._depth_correct[depth] / count
+                ),
+                "stable_loop_histogram": histogram.cpu().tolist(),
+                "stable_loop_histogram_note": "last bin means never stably correct",
+                "target_histogram": self._depth_target_histogram[depth].cpu().tolist(),
+                "mean_stable_loop_when_resolved": (
+                    weighted_loop_sum / resolved if resolved else None
+                ),
+            }
 
         return {
             "batch_count": self._batch_count,
@@ -613,6 +717,7 @@ class LoopDiagnosticsPolicy(
                     self._per_loop_prediction_histogram.cpu().tolist()
                 ),
             },
+            "by_reasoning_depth": depth_metrics,
         }
 
     def _require_samples(self) -> None:

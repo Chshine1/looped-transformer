@@ -14,7 +14,7 @@ from looped_transformer.core.config.base import (
     PositiveFloat,
     PositiveInt,
 )
-from looped_transformer.domains.mnli.types.model import ModelForwardOutput
+from looped_transformer.domains.text_classification.types import ModelForwardOutput
 
 
 @dataclass(frozen=True, slots=True)
