@@ -9,12 +9,12 @@ from looped_transformer.core.config.base import (
     OptionsModel,
     PositiveInt,
 )
-from looped_transformer.core.modules.masked_mean_pooling import MaskedMeanPooling
-from looped_transformer.core.modules.multi_head_attention import (
+from looped_transformer.core.modules.nn.masked_mean_pooling import MaskedMeanPooling
+from looped_transformer.core.modules.nn.multi_head_attention import (
     AttentionOptions,
     RoPEMultiHeadAttention,
 )
-from looped_transformer.core.modules.positional_rope import PositionalRoPECache
+from looped_transformer.core.modules.nn.positional_rope import PositionalRoPECache
 
 
 class HaltingCellOptions(OptionsModel):

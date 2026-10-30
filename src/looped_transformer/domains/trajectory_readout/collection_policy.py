@@ -4,7 +4,7 @@ import torch
 from torch import Tensor, nn
 from torch.utils.hooks import RemovableHandle
 
-from looped_transformer.core.abstractions.typed_module import TypedModule
+from looped_transformer.core.abstractions.typed_module import TypedModel
 from looped_transformer.core.evaluation import EvaluationPolicy
 from looped_transformer.domains.mnli.types.batch import MNLIBatch
 from looped_transformer.domains.text_classification.model import LoopedTextClassifier
@@ -28,7 +28,7 @@ class TrajectoryCollectionPolicy(
     @override
     def reset(
         self,
-        model: TypedModule[Tensor, Tensor, Tensor, ModelForwardOutput],
+        model: TypedModel[Tensor, Tensor, Tensor, ModelForwardOutput],
     ) -> None:
         self.close()
         self._clear_capture()

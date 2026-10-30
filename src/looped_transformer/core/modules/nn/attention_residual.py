@@ -9,12 +9,12 @@ from looped_transformer.core.config.base import (
     OptionsModel,
     PositiveInt,
 )
-from looped_transformer.core.modules.batch_dropout import (
+from looped_transformer.core.modules.nn.batch_dropout import (
     BatchDropout,
     BatchDropoutOptions,
 )
-from looped_transformer.core.modules.positional_rope import PositionalRoPECache
-from looped_transformer.core.modules.residual_scale import ResidualScale
+from looped_transformer.core.modules.nn.positional_rope import PositionalRoPECache
+from looped_transformer.core.modules.nn.residual_scale import ResidualScale
 from looped_transformer.utils.torch.functional import apply_rotary
 
 

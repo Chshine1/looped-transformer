@@ -6,7 +6,10 @@ from pydantic import BeforeValidator, Field
 from torch import Tensor
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-from looped_transformer.core.abstractions.training import ModelTrainingCollator
+from looped_transformer.core.abstractions.training import (
+    CollatedBatch,
+    ModelTrainingCollator,
+)
 from looped_transformer.core.config.base import (
     NonEmptyString,
     NonNegativeFloat,
@@ -104,7 +107,9 @@ class BackboneTrainingCollator(
         batch: MNLIBatch,
         device: torch.device,
         dtype: torch.dtype,
-    ) -> tuple[tuple[Tensor, Tensor, Tensor], BackboneLossInput]:
+    ) -> list[
+        CollatedBatch[MNLIBatch, Tensor, Tensor, Tensor, BackboneLossInput]
+    ]:
         student_encoding = self._student_tokenizer.encode(
             batch.premises, batch.hypotheses
         )
@@ -118,9 +123,15 @@ class BackboneTrainingCollator(
         )
 
         if self._teacher is None:
-            return (input_ids, padding_mask, token_type_ids), BackboneLossInput(
-                labels=labels
-            )
+            return [
+                CollatedBatch(
+                    batch=batch,
+                    task=None,
+                    inputs=(input_ids, padding_mask, token_type_ids),
+                    targets=BackboneLossInput(labels=labels),
+                    samples_count=len(batch.labels),
+                )
+            ]
 
         teacher_tokenizer = self._teacher_tokenizer
         teacher_to_project = self._teacher_to_project
@@ -153,7 +164,15 @@ class BackboneTrainingCollator(
         teacher_logits = (
             teacher_logits.index_select(1, indices).detach().clone().float()
         )
-        return (input_ids, padding_mask, token_type_ids), BackboneLossInput(
-            labels=labels,
-            teacher_logits=teacher_logits,
-        )
+        return [
+            CollatedBatch(
+                batch=batch,
+                task=None,
+                inputs=(input_ids, padding_mask, token_type_ids),
+                targets=BackboneLossInput(
+                    labels=labels,
+                    teacher_logits=teacher_logits,
+                ),
+                samples_count=len(batch.labels),
+            )
+        ]

@@ -17,20 +17,20 @@ from looped_transformer.core.config.base import (
     PositiveInt,
 )
 from looped_transformer.core.config.sequence import SequenceOptions
-from looped_transformer.core.modules.attention_residual import (
+from looped_transformer.core.modules.nn.attention_residual import (
     AttentionResidualOptions,
     AttnRes,
 )
-from looped_transformer.core.modules.masked_mean_pooling import MaskedMeanPooling
-from looped_transformer.core.modules.positional_rope import (
+from looped_transformer.core.modules.nn.masked_mean_pooling import MaskedMeanPooling
+from looped_transformer.core.modules.nn.positional_rope import (
     PositionalRoPECache,
     PositionalRoPEOptions,
 )
-from looped_transformer.core.modules.swi_glu_transformer_block import (
+from looped_transformer.core.modules.nn.swi_glu_transformer_block import (
     SwiGLUTransformerBlock,
     TransformerBlockOptions,
 )
-from looped_transformer.core.modules.timed_rope import (
+from looped_transformer.core.modules.nn.timed_rope import (
     TimedMultiHeadRoPECache,
     TimedRoPEOptions,
 )

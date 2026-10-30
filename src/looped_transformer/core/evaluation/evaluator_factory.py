@@ -2,7 +2,7 @@ from looped_transformer.core.abstractions.training import (
     IDataProvider,
     ModelTrainingCollator,
 )
-from looped_transformer.core.abstractions.typed_module import TypedModule
+from looped_transformer.core.abstractions.typed_module import TypedModel
 from looped_transformer.core.checkpointing.loader import CheckpointLoader
 from looped_transformer.core.config.runtime import DeviceOptions, PrecisionOptions
 from looped_transformer.core.evaluation import Evaluator
@@ -25,7 +25,7 @@ class EvaluatorFactory:
 
     def create[TBatch, *TModelInput, TModelOutput, TLossInput](
         self,
-        model: TypedModule[*TModelInput, TModelOutput],
+        model: TypedModel[*TModelInput, TModelOutput],
         collator: ModelTrainingCollator[TBatch, *TModelInput, TLossInput],
         policy: EvaluationPolicy[TBatch, *TModelInput, TModelOutput],
         data_provider: IDataProvider[TBatch],

@@ -4,7 +4,7 @@ from looped_transformer.core.abstractions.training import (
     IDataProvider,
     ModelTrainingCollator,
 )
-from looped_transformer.core.abstractions.typed_module import TypedModule
+from looped_transformer.core.abstractions.typed_module import TypedModel
 from looped_transformer.core.checkpointing.loader import CheckpointLoader
 from looped_transformer.core.config.base import ConfigPath, OptionsModel
 from looped_transformer.core.config.runtime import DeviceOptions, PrecisionOptions
@@ -18,7 +18,7 @@ class EvaluationCheckpointOptions(OptionsModel):
 class Evaluator[TBatch, *TModelInput, TModelOutput, TLossInput]:
     def __init__(
         self,
-        model: TypedModule[*TModelInput, TModelOutput],
+        model: TypedModel[*TModelInput, TModelOutput],
         collator: ModelTrainingCollator[TBatch, *TModelInput, TLossInput],
         policy: EvaluationPolicy[TBatch, *TModelInput, TModelOutput],
         data_provider: IDataProvider[TBatch],
@@ -60,25 +60,33 @@ class Evaluator[TBatch, *TModelInput, TModelOutput, TLossInput]:
                 module.train(training)
             raise
 
-    def evaluate_batch(self, batch: TBatch) -> TModelOutput:
+    def evaluate_batch(self, batch: TBatch) -> list[TModelOutput]:
         """Evaluate one caller-supplied batch in the current evaluator session."""
         if self._training_modes is None:
             raise RuntimeError("The evaluator must be opened before evaluating a batch")
 
-        i, _ = self._collator.collate_batch(
+        micro_batches = self._collator.collate_batch(
             batch,
             self._device_options.device,
             self._precision_options.dtype,
         )
+        if not micro_batches:
+            raise ValueError("collate_batch() returned no micro-batches")
 
-        with (
-            torch.no_grad(),
-            self._precision_options.autocast(self._device_options.device),
-        ):
-            output = self._model(*i)
+        outputs: list[TModelOutput] = []
+        for micro_batch in micro_batches:
+            with (
+                torch.no_grad(),
+                self._precision_options.autocast(self._device_options.device),
+            ):
+                output = self._model.forward_task(
+                    *micro_batch.inputs,
+                    task=micro_batch.task,
+                )
+            self._policy.attend_batch(micro_batch.batch, output)
+            outputs.append(output)
 
-        self._policy.attend_batch(batch, output)
-        return output
+        return outputs
 
     def close(self) -> None:
         """Close the current evaluator session and restore module training modes."""

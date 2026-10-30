@@ -3,7 +3,10 @@ from typing import override
 import torch
 from torch import Tensor
 
-from looped_transformer.core.abstractions.training import ModelTrainingCollator
+from looped_transformer.core.abstractions.training import (
+    CollatedBatch,
+    ModelTrainingCollator,
+)
 from looped_transformer.domains.mnli.types.batch import MNLIBatch
 from looped_transformer.domains.mnli.types.logic_relation import LogicRelation
 from looped_transformer.domains.text_classification.tokenizer import PairTokenizer
@@ -16,7 +19,7 @@ class MNLICollator(ModelTrainingCollator[MNLIBatch, Tensor, Tensor, Tensor, Tens
     @override
     def collate_batch(
         self, batch: MNLIBatch, device: torch.device, dtype: torch.dtype
-    ) -> tuple[tuple[Tensor, Tensor, Tensor], Tensor]:
+    ) -> list[CollatedBatch[MNLIBatch, Tensor, Tensor, Tensor, Tensor]]:
         encoding = self._tokenizer.encode(batch.premises, batch.hypotheses)
         input_ids = encoding.input_ids.to(device)
         attention_mask = encoding.attention_mask.to(device)
@@ -26,4 +29,12 @@ class MNLICollator(ModelTrainingCollator[MNLIBatch, Tensor, Tensor, Tensor, Tens
             dtype=torch.long,
             device=device,
         )
-        return (input_ids, attention_mask, token_type_ids), label_tensor
+        return [
+            CollatedBatch(
+                batch=batch,
+                task=None,
+                inputs=(input_ids, attention_mask, token_type_ids),
+                targets=label_tensor,
+                samples_count=len(batch.labels),
+            )
+        ]

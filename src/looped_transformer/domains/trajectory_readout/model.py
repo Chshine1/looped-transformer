@@ -3,7 +3,7 @@ from typing import Literal, cast
 import torch
 from torch import Tensor, nn
 
-from looped_transformer.core.modules.masked_mean_pooling import MaskedMeanPooling
+from looped_transformer.core.modules.nn.masked_mean_pooling import MaskedMeanPooling
 
 TrajectoryReadoutArchitecture = Literal["bidirectional", "causal"]
 

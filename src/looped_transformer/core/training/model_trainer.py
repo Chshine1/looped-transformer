@@ -11,7 +11,7 @@ from looped_transformer.core.abstractions.training import (
     TrainingStage,
     TrainingState,
 )
-from looped_transformer.core.abstractions.typed_module import TypedModule
+from looped_transformer.core.abstractions.typed_module import TypedModel
 from looped_transformer.core.checkpointing import (
     CheckpointLoader,
     CheckpointSaver,
@@ -26,7 +26,7 @@ from looped_transformer.core.training.config import (
 class ModelTrainer[TBatch, *TModelInput, TModelOutput, TLossInput]:
     def __init__(
         self,
-        model: TypedModule[*TModelInput, TModelOutput],
+        model: TypedModel[*TModelInput, TModelOutput],
         collator: ModelTrainingCollator[TBatch, *TModelInput, TLossInput],
         stage: TrainingStage[TBatch, TModelOutput, TLossInput],
         resume_from: str | None,
@@ -106,19 +106,35 @@ class ModelTrainer[TBatch, *TModelInput, TModelOutput, TLossInput]:
         try:
             batch_index = 0
             while (batch := stage.data_provider.fetch()) is not None:
-                i, o = self._collator.collate_batch(
+                micro_batches = self._collator.collate_batch(
                     batch,
                     self._device_options.device,
                     self._precision_options.dtype,
+                )
+                if not micro_batches:
+                    raise ValueError("collate_batch() returned no micro-batches")
+                samples_count = sum(
+                    micro_batch.samples_count for micro_batch in micro_batches
                 )
                 acc_window_start, acc_window_end = self._get_accumulation_window(
                     stage.data_provider.get_batch_size(), batch_index, stage
                 )
                 with self._precision_options.autocast(self._device_options.device):
-                    output = self._model(*i)
-                    loss = stage.loss(output, o)
-                    scaled_loss = loss / (acc_window_end - acc_window_start)
-                scaler.scale(scaled_loss).backward()
+                    for micro_batch in micro_batches:
+                        output = self._model.forward_task(
+                            *micro_batch.inputs,
+                            task=micro_batch.task,
+                        )
+                        loss = stage.loss(output, micro_batch.targets)
+                        micro_batch_weight = (
+                            micro_batch.samples_count / samples_count
+                        )
+                        scaled_loss = (
+                            loss
+                            * micro_batch_weight
+                            / (acc_window_end - acc_window_start)
+                        )
+                        scaler.scale(scaled_loss).backward()
 
                 batch_index += 1
                 if batch_index != acc_window_end:

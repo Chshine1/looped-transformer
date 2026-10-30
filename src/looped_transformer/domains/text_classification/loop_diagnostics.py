@@ -6,7 +6,7 @@ import torch
 from torch import Tensor
 from torch.nn import functional
 
-from looped_transformer.core.abstractions.typed_module import TypedModule
+from looped_transformer.core.abstractions.typed_module import TypedModel
 from looped_transformer.core.config.base import (
     ExclusiveProbability,
     NonNegativeInt,
@@ -172,7 +172,7 @@ class LoopDiagnosticsPolicy(
 
     @override
     def reset(
-        self, model: TypedModule[Tensor, Tensor, Tensor, ModelForwardOutput]
+        self, model: TypedModel[Tensor, Tensor, Tensor, ModelForwardOutput]
     ) -> None:
         self._initialize_state()
         self._logger.start()
