@@ -1,3 +1,4 @@
+from typing import override
 import math
 from typing import Self
 
@@ -6,7 +7,7 @@ import torch.nn as nn
 from pydantic import model_validator
 from torch import Tensor
 
-from looped_transformer.core.abstractions.typed_module import IModule
+from looped_transformer.core.abstractions.typed_module import TypedModule
 from looped_transformer.core.config.base import (
     ConfigPath,
     ExclusiveProbability,
@@ -17,6 +18,7 @@ from looped_transformer.core.config.base import (
     PositiveInt,
 )
 from looped_transformer.core.config.sequence import SequenceOptions
+from looped_transformer.core.modules.branched_module import BranchedModule
 from looped_transformer.core.modules.nn.attention_residual import (
     AttentionResidualOptions,
     AttnRes,
@@ -114,9 +116,7 @@ class LoopModuleOptions(OptionsModel):
     max_iterations: PositiveInt
 
 
-class LoopedTextClassifier(
-    nn.Module, IModule[Tensor, Tensor, Tensor, ModelForwardOutput]
-):
+class LoopedTextClassifier(BranchedModule[Tensor, Tensor, Tensor, ModelForwardOutput]):
     class _MultiHeadRotation(nn.Module):
         _timed_rope_cache: TimedMultiHeadRoPECache
 
@@ -281,9 +281,12 @@ class LoopedTextClassifier(
 
         self._classify_normalization = nn.RMSNorm(dim)
         self._classifier_dropout = nn.Dropout(dropout.classifier)
-        self._classifier = nn.Linear(dim, model_options.output_classes_count)
 
-    def forward(
+        classifier = TypedModule(nn.Linear(dim, model_options.output_classes_count))
+        self._classifier = self._create_branched(classifier, {})
+
+    @override
+    def _forward_task(
         self,
         input_ids: Tensor,
         padding_mask: Tensor,

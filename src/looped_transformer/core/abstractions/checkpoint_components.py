@@ -1,12 +1,13 @@
 from dataclasses import dataclass
 
 import torch
-from torch import nn
+
+from looped_transformer.core.abstractions.typed_module import TypedBranchedModule
 
 
 @dataclass
 class CheckpointComponents:
-    model: nn.Module
+    model: TypedBranchedModule
     optimizer: torch.optim.Optimizer
     scheduler: torch.optim.lr_scheduler.LRScheduler
     scaler: torch.amp.GradScaler

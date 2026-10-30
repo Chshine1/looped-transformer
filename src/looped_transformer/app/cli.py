@@ -1,11 +1,11 @@
-from looped_transformer.app.commands.evaluate import EvaluateCommand
-from looped_transformer.app.commands.train import TrainCommand
-from looped_transformer.app.registry import CommandRegistry
-from looped_transformer.app.command import CommandContext
 import argparse
 
+from looped_transformer.app.command import CommandContext
+from looped_transformer.app.commands.evaluate import EvaluateCommand
+from looped_transformer.app.commands.train import TrainCommand
 from looped_transformer.app.config import load_options
 from looped_transformer.app.container import build_container
+from looped_transformer.app.registry import CommandRegistry
 
 
 def create_command_registry() -> CommandRegistry:

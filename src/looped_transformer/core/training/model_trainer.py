@@ -11,7 +11,7 @@ from looped_transformer.core.abstractions.training import (
     TrainingStage,
     TrainingState,
 )
-from looped_transformer.core.abstractions.typed_module import TypedModel
+from looped_transformer.core.abstractions.typed_module import TypedBranchedModule
 from looped_transformer.core.checkpointing import (
     CheckpointLoader,
     CheckpointSaver,
@@ -26,7 +26,7 @@ from looped_transformer.core.training.config import (
 class ModelTrainer[TBatch, *TModelInput, TModelOutput, TLossInput]:
     def __init__(
         self,
-        model: TypedModel[*TModelInput, TModelOutput],
+        model: TypedBranchedModule[*TModelInput, TModelOutput],
         collator: ModelTrainingCollator[TBatch, *TModelInput, TLossInput],
         stage: TrainingStage[TBatch, TModelOutput, TLossInput],
         resume_from: str | None,
@@ -119,22 +119,20 @@ class ModelTrainer[TBatch, *TModelInput, TModelOutput, TLossInput]:
                 acc_window_start, acc_window_end = self._get_accumulation_window(
                     stage.data_provider.get_batch_size(), batch_index, stage
                 )
-                with self._precision_options.autocast(self._device_options.device):
-                    for micro_batch in micro_batches:
-                        output = self._model.forward_task(
+                for micro_batch in micro_batches:
+                    with self._precision_options.autocast(self._device_options.device):
+                        output = self._model(
                             *micro_batch.inputs,
                             task=micro_batch.task,
                         )
                         loss = stage.loss(output, micro_batch.targets)
-                        micro_batch_weight = (
-                            micro_batch.samples_count / samples_count
-                        )
+                        micro_batch_weight = micro_batch.samples_count / samples_count
                         scaled_loss = (
                             loss
                             * micro_batch_weight
                             / (acc_window_end - acc_window_start)
                         )
-                        scaler.scale(scaled_loss).backward()
+                    scaler.scale(scaled_loss).backward()
 
                 batch_index += 1
                 if batch_index != acc_window_end:
@@ -195,7 +193,7 @@ class ModelTrainer[TBatch, *TModelInput, TModelOutput, TLossInput]:
         optimizer.zero_grad(set_to_none=True)
 
         components = CheckpointComponents(
-            model=self._model.torch,
+            model=self._model,
             optimizer=optimizer,
             scheduler=scheduler,
             scaler=scaler,

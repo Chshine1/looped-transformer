@@ -107,9 +107,7 @@ class BackboneTrainingCollator(
         batch: MNLIBatch,
         device: torch.device,
         dtype: torch.dtype,
-    ) -> list[
-        CollatedBatch[MNLIBatch, Tensor, Tensor, Tensor, BackboneLossInput]
-    ]:
+    ) -> list[CollatedBatch[MNLIBatch, Tensor, Tensor, Tensor, BackboneLossInput]]:
         student_encoding = self._student_tokenizer.encode(
             batch.premises, batch.hypotheses
         )

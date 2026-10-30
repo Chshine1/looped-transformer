@@ -43,7 +43,7 @@ class BranchedModuleTests(unittest.TestCase):
         self.assertIs(model.torch, module)
         self.assertEqual(model(torch.tensor(1.0), task="triple").item(), 21.0)
         self.assertEqual(
-            model.forward_task(torch.tensor(1.0), task=None).item(),
+            model(torch.tensor(1.0), task=None).item(),
             10.0,
         )
 
@@ -124,11 +124,11 @@ class BranchedModuleTests(unittest.TestCase):
             if ".branches." not in key
         }
         checkpoint["first.main.factor"] = torch.tensor(11.0)
-        target = ExampleBranchedModule()
+        target = TypedBranchedModule(ExampleBranchedModule())
 
-        incompatible = target.load_branched_state_dict(checkpoint)
+        incompatible = target.load_state_dict(checkpoint)
 
-        self.assertEqual(target(torch.tensor(1.0), None).item(), 55.0)
+        self.assertEqual(target(torch.tensor(1.0), task=None).item(), 55.0)
         self.assertEqual(
             set(incompatible.missing_keys),
             {
@@ -137,15 +137,15 @@ class BranchedModuleTests(unittest.TestCase):
             },
         )
         with self.assertRaisesRegex(RuntimeError, "missing branch keys"):
-            target.load_branched_state_dict(checkpoint, strict_branches=True)
+            target.load_state_dict(checkpoint, strict_branches=True)
 
     def test_loading_still_rejects_missing_main_parameters_by_default(self) -> None:
-        model = ExampleBranchedModule()
+        model = TypedBranchedModule(ExampleBranchedModule())
         checkpoint = dict(model.state_dict())
         del checkpoint["first.main.factor"]
 
         with self.assertRaisesRegex(RuntimeError, "missing main keys"):
-            model.load_branched_state_dict(checkpoint)
+            model.load_state_dict(checkpoint)
 
 
 if __name__ == "__main__":

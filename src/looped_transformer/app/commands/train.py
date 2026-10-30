@@ -2,7 +2,7 @@ from argparse import Namespace
 
 from looped_transformer.app.command import Command, CommandContext
 from looped_transformer.app.commands.utils.modeling import create_model
-from looped_transformer.core.abstractions.typed_module import TypedModule
+from looped_transformer.core.abstractions.typed_module import TypedBranchedModule
 from looped_transformer.core.config.runtime import DeviceOptions
 from looped_transformer.core.training.model_trainer import ModelTrainer
 from looped_transformer.core.training.model_trainer_factory import ModelTrainerFactory
@@ -57,7 +57,7 @@ class TrainCommand(Command):
     @staticmethod
     def _initialize_embeddings(
         context: CommandContext,
-        backbone: TypedModule,
+        backbone: TypedBranchedModule,
         tokenizer: PairTokenizer,
     ) -> None:
         options = context.options
@@ -84,7 +84,7 @@ class TrainCommand(Command):
         self,
         context: CommandContext,
         stage_type: str,
-        backbone: TypedModule,
+        backbone: TypedBranchedModule,
         tokenizer: PairTokenizer,
         device_options: DeviceOptions,
     ) -> ModelTrainer:
@@ -95,7 +95,7 @@ class TrainCommand(Command):
     @staticmethod
     def _create_clutrr_trainer(
         context: CommandContext,
-        backbone: TypedModule,
+        backbone: TypedBranchedModule,
         tokenizer: PairTokenizer,
     ) -> ModelTrainer:
         options = context.options
@@ -111,7 +111,7 @@ class TrainCommand(Command):
     @staticmethod
     def _create_mnli_trainer(
         context: CommandContext,
-        backbone: TypedModule,
+        backbone: TypedBranchedModule,
         tokenizer: PairTokenizer,
         device_options: DeviceOptions,
     ) -> ModelTrainer:

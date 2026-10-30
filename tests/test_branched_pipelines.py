@@ -50,7 +50,7 @@ class _CheckpointLoader:
     def load(self, _path: object) -> None:
         pass
 
-    def load_model(self, _model: nn.Module) -> None:
+    def load_model(self, _model: TypedBranchedModule) -> None:
         pass
 
     def load_training_state(self) -> object:

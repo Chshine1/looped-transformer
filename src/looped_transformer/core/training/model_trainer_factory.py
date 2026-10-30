@@ -2,7 +2,7 @@ from looped_transformer.core.abstractions.training import (
     ModelTrainingCollator,
     TrainingStage,
 )
-from looped_transformer.core.abstractions.typed_module import TypedModel
+from looped_transformer.core.abstractions.typed_module import TypedBranchedModule
 from looped_transformer.core.checkpointing import CheckpointLoader, CheckpointSaver
 from looped_transformer.core.config.runtime import DeviceOptions, PrecisionOptions
 from looped_transformer.core.training.config import (
@@ -38,7 +38,7 @@ class ModelTrainerFactory:
 
     def create[TBatch, *TModelInput, TModelOutput, TLossInput](
         self,
-        model: TypedModel[*TModelInput, TModelOutput],
+        model: TypedBranchedModule[*TModelInput, TModelOutput],
         collator: ModelTrainingCollator[TBatch, *TModelInput, TLossInput],
         stage: TrainingStage[TBatch, TModelOutput, TLossInput],
     ) -> ModelTrainer[TBatch, *TModelInput, TModelOutput, TLossInput]:

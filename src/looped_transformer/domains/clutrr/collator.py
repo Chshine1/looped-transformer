@@ -23,9 +23,7 @@ class CLUTRRCollator(
     @override
     def collate_batch(
         self, batch: CLUTRRBatch, device: torch.device, dtype: torch.dtype
-    ) -> list[
-        CollatedBatch[CLUTRRBatch, Tensor, Tensor, Tensor, BackboneLossInput]
-    ]:
+    ) -> list[CollatedBatch[CLUTRRBatch, Tensor, Tensor, Tensor, BackboneLossInput]]:
         encoding = self._tokenizer.encode(batch.stories, batch.queries)
         labels = torch.tensor(
             [relation_index(label) for label in batch.labels],

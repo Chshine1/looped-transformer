@@ -2,12 +2,12 @@ import random
 from pathlib import Path
 
 import torch
-from torch import nn
 
 from looped_transformer.core.abstractions.checkpoint_components import (
     CheckpointComponents,
 )
 from looped_transformer.core.abstractions.training import TrainingState
+from looped_transformer.core.abstractions.typed_module import TypedBranchedModule
 from looped_transformer.core.config.runtime import DeviceOptions
 
 
@@ -52,7 +52,7 @@ class CheckpointLoader:
         components.scheduler.load_state_dict(self._checkpoint["scheduler"])
         components.scaler.load_state_dict(self._checkpoint["scaler"])
 
-    def load_model(self, model: nn.Module) -> None:
+    def load_model(self, model: TypedBranchedModule) -> None:
         if self._checkpoint is None:
             raise RuntimeError()
         model.load_state_dict(self._checkpoint["model"])

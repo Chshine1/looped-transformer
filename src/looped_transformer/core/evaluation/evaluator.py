@@ -4,7 +4,7 @@ from looped_transformer.core.abstractions.training import (
     IDataProvider,
     ModelTrainingCollator,
 )
-from looped_transformer.core.abstractions.typed_module import TypedModel
+from looped_transformer.core.abstractions.typed_module import TypedBranchedModule
 from looped_transformer.core.checkpointing.loader import CheckpointLoader
 from looped_transformer.core.config.base import ConfigPath, OptionsModel
 from looped_transformer.core.config.runtime import DeviceOptions, PrecisionOptions
@@ -18,7 +18,7 @@ class EvaluationCheckpointOptions(OptionsModel):
 class Evaluator[TBatch, *TModelInput, TModelOutput, TLossInput]:
     def __init__(
         self,
-        model: TypedModel[*TModelInput, TModelOutput],
+        model: TypedBranchedModule[*TModelInput, TModelOutput],
         collator: ModelTrainingCollator[TBatch, *TModelInput, TLossInput],
         policy: EvaluationPolicy[TBatch, *TModelInput, TModelOutput],
         data_provider: IDataProvider[TBatch],
@@ -38,7 +38,7 @@ class Evaluator[TBatch, *TModelInput, TModelOutput, TLossInput]:
 
         try:
             checkpoint_loader.load(checkpoint_options.path)
-            checkpoint_loader.load_model(self._model.torch)
+            checkpoint_loader.load_model(self._model)
         finally:
             checkpoint_loader.dispose()
 
@@ -79,7 +79,7 @@ class Evaluator[TBatch, *TModelInput, TModelOutput, TLossInput]:
                 torch.no_grad(),
                 self._precision_options.autocast(self._device_options.device),
             ):
-                output = self._model.forward_task(
+                output = self._model(
                     *micro_batch.inputs,
                     task=micro_batch.task,
                 )
