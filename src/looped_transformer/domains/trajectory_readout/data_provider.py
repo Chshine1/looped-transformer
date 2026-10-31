@@ -4,7 +4,7 @@ from torch import Tensor
 
 from looped_transformer.core.abstractions.training import IDataProvider
 from looped_transformer.core.evaluation import Evaluator
-from looped_transformer.domains.mnli.types.batch import MNLIBatch
+from looped_transformer.domains.clutrr.types import CLUTRRBatch
 from looped_transformer.domains.text_classification.types import ModelForwardOutput
 from looped_transformer.domains.trajectory_readout.batch import TrajectoryBatch
 from looped_transformer.domains.trajectory_readout.collection_policy import (
@@ -17,9 +17,9 @@ class TrajectoryDataProvider(IDataProvider[TrajectoryBatch]):
 
     def __init__(
         self,
-        source: IDataProvider[MNLIBatch],
+        source: IDataProvider[CLUTRRBatch],
         evaluator: Evaluator[
-            MNLIBatch, Tensor, Tensor, Tensor, ModelForwardOutput, Tensor
+            CLUTRRBatch, Tensor, Tensor, Tensor, ModelForwardOutput, Tensor
         ],
         collection_policy: TrajectoryCollectionPolicy,
         output_batch_size: int,
@@ -88,16 +88,18 @@ class TrajectoryDataProvider(IDataProvider[TrajectoryBatch]):
         if pending is None:
             raise RuntimeError("No collected trajectory batch is pending")
         start = self._pending_offset
-        stop = min(start + self._output_batch_size, len(pending.mnli.labels))
+        stop = min(start + self._output_batch_size, len(pending.source.labels))
         self._pending_offset = stop
-        if stop == len(pending.mnli.labels):
+        if stop == len(pending.source.labels):
             self._pending = None
             self._pending_offset = 0
         return TrajectoryBatch(
-            mnli=MNLIBatch(
-                premises=pending.mnli.premises[start:stop],
-                hypotheses=pending.mnli.hypotheses[start:stop],
-                labels=pending.mnli.labels[start:stop],
+            source=CLUTRRBatch(
+                ids=pending.source.ids[start:stop],
+                stories=pending.source.stories[start:stop],
+                queries=pending.source.queries[start:stop],
+                labels=pending.source.labels[start:stop],
+                depths=pending.source.depths[start:stop],
             ),
             timed_hidden_states=pending.timed_hidden_states[:, start:stop],
             padding_mask=pending.padding_mask[start:stop],

@@ -2,12 +2,12 @@ from dataclasses import dataclass
 
 from torch import Tensor
 
-from looped_transformer.domains.mnli.types.batch import MNLIBatch
+from looped_transformer.domains.clutrr.types import CLUTRRBatch
 
 
 @dataclass(frozen=True, slots=True)
 class TrajectoryBatch:
-    mnli: MNLIBatch
+    source: CLUTRRBatch
     timed_hidden_states: Tensor
     padding_mask: Tensor
     final_logits: Tensor

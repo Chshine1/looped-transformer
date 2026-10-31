@@ -6,14 +6,14 @@ from torch.utils.hooks import RemovableHandle
 
 from looped_transformer.core.abstractions.typed_module import TypedBranchedModule
 from looped_transformer.core.evaluation import EvaluationPolicy
-from looped_transformer.domains.mnli.types.batch import MNLIBatch
+from looped_transformer.domains.clutrr.types import CLUTRRBatch
 from looped_transformer.domains.text_classification.model import LoopedTextClassifier
 from looped_transformer.domains.text_classification.types import ModelForwardOutput
 from looped_transformer.domains.trajectory_readout.batch import TrajectoryBatch
 
 
 class TrajectoryCollectionPolicy(
-    EvaluationPolicy[MNLIBatch, Tensor, Tensor, Tensor, ModelForwardOutput]
+    EvaluationPolicy[CLUTRRBatch, Tensor, Tensor, Tensor, ModelForwardOutput]
 ):
     """Collect aligned loop states without changing the backbone interface."""
 
@@ -68,7 +68,7 @@ class TrajectoryCollectionPolicy(
         self._hook_handles.extend(handles)
 
     @override
-    def attend_batch(self, batch: MNLIBatch, output: ModelForwardOutput) -> None:
+    def attend_batch(self, batch: CLUTRRBatch, output: ModelForwardOutput) -> None:
         if self._collected is not None:
             raise RuntimeError("The previous trajectory has not been consumed")
         if self._padding_mask is None or any(state is None for state in self._states):
@@ -78,7 +78,7 @@ class TrajectoryCollectionPolicy(
             [state for state in self._states if state is not None], dim=0
         )
         self._collected = TrajectoryBatch(
-            mnli=batch,
+            source=batch,
             timed_hidden_states=self._copy_to_cpu(states),
             padding_mask=self._copy_to_cpu(self._padding_mask),
             final_logits=self._copy_to_cpu(output["timed_logits"][-1]),

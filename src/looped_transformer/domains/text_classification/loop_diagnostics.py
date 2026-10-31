@@ -16,7 +16,6 @@ from looped_transformer.core.config.base import (
 from looped_transformer.core.config.runtime import DeviceOptions
 from looped_transformer.core.evaluation import EvaluationPolicy
 from looped_transformer.core.logging import StructuralLogger
-from looped_transformer.domains.mnli.types.logic_relation import LogicRelation
 from looped_transformer.domains.text_classification.config.options import LoopOptions
 from looped_transformer.domains.text_classification.types import ModelForwardOutput
 
@@ -87,8 +86,8 @@ class LoopDiagnosticsPolicy(
         device_options: DeviceOptions,
         options: LoopDiagnosticsOptions,
         logger: StructuralLogger,
-        label_to_index: Callable[[str], int] | None = None,
-        classes_count: int | None = None,
+        label_to_index: Callable[[str], int],
+        classes_count: int,
     ) -> None:
         self._max_iterations = loop_options.max_iterations
         self._device = device_options.device
@@ -96,9 +95,7 @@ class LoopDiagnosticsPolicy(
         self._shuffle_oracle_repeats = options.shuffle_oracle_repeats
         self._shuffle_seed = options.shuffle_seed
         self._logger = logger
-        self._label_to_index = label_to_index or (
-            lambda label: LogicRelation.from_string(label).value
-        )
+        self._label_to_index = label_to_index
         self._classes_count = classes_count
         self._initialize_state()
 

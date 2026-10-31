@@ -130,6 +130,7 @@ class ModelTrainer[TBatch, *TModelInput, TModelOutput, TLossInput]:
                         scaled_loss = (
                             loss
                             * micro_batch_weight
+                            * micro_batch.loss_scale
                             / (acc_window_end - acc_window_start)
                         )
                     scaler.scale(scaled_loss).backward()

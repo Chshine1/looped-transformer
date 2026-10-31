@@ -14,6 +14,14 @@ data_options:
   file_path: data/clutrr-v1.3/train.jsonl
   manifest_path: data/clutrr-v1.3/manifest.json
   batch_size: 96
+collator_options:
+  main_loss_scale: 1.0
+  proofwriter:
+    file_path: data/proofwriter-owa-d5-aux/train.jsonl
+    manifest_path: data/proofwriter-owa-d5-aux/manifest.json
+    examples_per_main_example: 0.125
+    loss_scale: 0.1
+    seed: 42
 loss_options:
   type: anchored_sampled_loop_cross_entropy
   sampled_loops: [ 3, 4, 5 ]
@@ -21,9 +29,6 @@ loss_options:
   sampled_loss_scale: 0.20
   label_smoothing: 0.05
   time_rope_regularization_scale: 0.01
-  # External NLI distillation is intentionally unavailable for CLUTRR.
-  distillation_scale: 0.0
-  teacher_temperature: 2.0
 optimizer_options:
   learning_rates:
     '_attn_res\._residual_scale': 0.0001

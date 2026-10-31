@@ -1,10 +1,9 @@
-from typing import override
 import math
-from typing import Self
+from typing import Self, override
 
 import torch
 import torch.nn as nn
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from torch import Tensor
 
 from looped_transformer.core.abstractions.typed_module import TypedModule
@@ -83,6 +82,9 @@ class ModelOptions(OptionsModel):
 
     hidden_state_dimension: PositiveInt
     output_classes_count: PositiveInt
+    auxiliary_output_classes_counts: dict[NonEmptyString, PositiveInt] = Field(
+        default_factory=dict
+    )
     embedding: _EmbeddingOptions
     loop: LoopOptions
     dropout: _DropoutOptions
@@ -283,7 +285,11 @@ class LoopedTextClassifier(BranchedModule[Tensor, Tensor, Tensor, ModelForwardOu
         self._classifier_dropout = nn.Dropout(dropout.classifier)
 
         classifier = TypedModule(nn.Linear(dim, model_options.output_classes_count))
-        self._classifier = self._create_branched(classifier, {})
+        side_classifiers = {
+            task: TypedModule(nn.Linear(dim, classes_count))
+            for task, classes_count in model_options.auxiliary_output_classes_counts.items()
+        }
+        self._classifier = self._create_branched(classifier, side_classifiers)
 
     @override
     def _forward_task(

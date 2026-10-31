@@ -88,6 +88,7 @@ class _Collator:
                 inputs=(torch.tensor(1.0),),
                 targets=torch.tensor(0.0),
                 samples_count=1,
+                loss_scale=2.0,
             ),
             CollatedBatch(
                 batch="side samples",
@@ -95,6 +96,7 @@ class _Collator:
                 inputs=(torch.tensor(1.0),),
                 targets=torch.tensor(0.0),
                 samples_count=2,
+                loss_scale=0.5,
             ),
         ]
 
@@ -215,9 +217,9 @@ class BranchedPipelineTests(unittest.TestCase):
         trainer.train()
 
         parameters = dict(model.torch.named_parameters())
-        self.assertAlmostEqual(parameters["scale.main.factor"].item(), 2.0 - 0.4 / 3)
+        self.assertAlmostEqual(parameters["scale.main.factor"].item(), 2.0 - 0.8 / 3)
         self.assertAlmostEqual(
-            parameters["scale.branches.side.factor"].item(), 2.6, places=6
+            parameters["scale.branches.side.factor"].item(), 2.8, places=6
         )
 
 

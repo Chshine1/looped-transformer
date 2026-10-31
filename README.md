@@ -1,9 +1,8 @@
 # Looped Transformer for Latent Reasoning Depth
 
 This repository studies whether a small recurrent-depth Transformer can learn
-useful, sample-dependent computation trajectories on static text-classification
-tasks. Corrected CLUTRR v1.3 relational classification is the active experiment;
-MNLI is retained as the established natural-language baseline.
+useful, sample-dependent computation trajectories on corrected CLUTRR v1.3
+relational classification.
 
 ## Research contract
 
@@ -22,20 +21,17 @@ eventual deployed controller is causal and is trained only after the backbone
 and offline teacher are demonstrably strong.
 
 No loop selector used during backbone training may depend on gold labels or a
-teacher's predicted class distribution. Earlier MNLI experiments using such
-feedback learned a depth-to-class code: label-aware oracle accuracy became
-nearly perfect while shuffled-label oracle accuracy was also extremely high and
-fixed-loop performance collapsed. A supervised teacher must therefore remain a
-post-backbone inference-policy estimator unless a genuine bilevel/meta teaching
-objective is introduced.
+teacher's predicted class distribution. Such feedback can leak a depth-to-class
+code into the backbone: label-aware oracle accuracy can look excellent even
+when shuffled-label oracle accuracy is also high and fixed-loop performance
+collapses. A supervised teacher must therefore remain a post-backbone
+inference-policy estimator unless a genuine bilevel/meta teaching objective is
+introduced.
 
 For CLUTRR, the reference path length is evaluation metadata, not a training or
 routing target. A relationship between path length and useful loop depth is
 evidence to investigate, not permission to feed the path length or label-aware
 oracle back into the backbone.
-
-External NLI logit distillation remains available only in the MNLI baseline. It
-is not a CLUTRR trajectory teacher and is not defined for the active experiment.
 
 ## Why corrected CLUTRR
 
@@ -162,10 +158,10 @@ used for the active experiment.
 
 ## Model and objective
 
-The roughly 11M-parameter backbone is shared by CLUTRR and MNLI. BERT's
-768-dimensional word and segment embeddings are projected into the model's
-256-dimensional input space using a reproducible PCA basis. The remaining
-recurrent Transformer is trained for the task rather than imported from BERT.
+The roughly 11M-parameter backbone uses BERT's 768-dimensional word and segment
+embeddings projected into the model's 256-dimensional input space with a
+reproducible PCA basis. The remaining recurrent Transformer is trained for
+CLUTRR rather than imported from BERT.
 
 Let $H_t$ be the recurrent state at loop $t$. Two shared Transformer blocks and
 rotary loop-time coordinates update it for six loops. Classification uses masked
@@ -183,13 +179,6 @@ Train the active CLUTRR configuration with:
 
 ```bash
 pixi run -e fallback looped-transformer --config-dir conf train
-```
-
-The retained MNLI baseline is independently executable:
-
-```bash
-pixi run -e fallback looped-transformer \
-  --config-dir conf --config-name mnli train
 ```
 
 ## Evaluation
@@ -275,8 +264,6 @@ appropriate before distributing derived data or checkpoints.
   tokenizer, loss, pretrained initialization, and diagnostics.
 - `looped_transformer.domains.clutrr`: corrected data contract, provider,
   collator, labels, and training-stage plugin.
-- `looped_transformer.domains.mnli`: retained MNLI data and optional external-NLI
-  teacher baseline.
 - `looped_transformer.domains.trajectory_readout`: frozen-trajectory readout
   infrastructure, to be used after a strong backbone exists.
 

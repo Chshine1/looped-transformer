@@ -20,11 +20,13 @@ tokenizer:
     pretrained_model: google-bert/bert-base-uncased
     revision: 86b5e0934494bd15c9632b12f734a8a67f723594
   sequence:
-    max_sequence_length: 128
+    max_sequence_length: 256
 
 model:
   hidden_state_dimension: 256
-  output_classes_count: 3
+  output_classes_count: 18
+  auxiliary_output_classes_counts:
+    proofwriter: 3
   embedding:
     segment_types_count: 2
     initialization:

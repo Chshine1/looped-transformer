@@ -6,7 +6,6 @@ from transformers import TensorType
 
 # noinspection protected-member
 from transformers.models.bert.tokenization_bert import BertTokenizerFast
-from transformers.utils import PaddingStrategy
 
 from looped_transformer.core.config.base import NonEmptyString, OptionsModel
 from looped_transformer.core.config.sequence import SequenceOptions
@@ -59,11 +58,16 @@ class PairTokenizer:
         encoding = self._tokenizer(
             text=premises,
             text_pair=hypotheses,
-            padding=PaddingStrategy.MAX_LENGTH,
-            truncation=True,
-            max_length=self._max_sequence_length,
+            padding=True,
+            truncation=False,
             return_tensors=TensorType.PYTORCH,
         )
+        sequence_length = encoding["input_ids"].shape[1]
+        if sequence_length > self._max_sequence_length:
+            raise ValueError(
+                "Tokenized batch exceeds max_sequence_length: "
+                f"{sequence_length} > {self._max_sequence_length}"
+            )
         return TokenizeResult(
             input_ids=encoding["input_ids"],
             attention_mask=encoding["attention_mask"],

@@ -16,6 +16,7 @@ from looped_transformer.core.training.stage import StageTemplate
 from looped_transformer.core.training.training_stage_registry import (
     TrainingStageRegistry,
 )
+from looped_transformer.domains.clutrr.collator import CLUTRRCollatorOptions
 from looped_transformer.domains.clutrr.data_provider import (
     CLUTRRDataOptions,
     CLUTRRDataProvider,
@@ -34,6 +35,7 @@ from looped_transformer.utils.torch.schedulers import SchedulerOptions, create_s
 class LoopedCLUTRRStageTemplate(StageTemplate):
     type: ClassVar[str] = "looped_clutrr"
     data_options: CLUTRRDataOptions
+    collator_options: CLUTRRCollatorOptions
     loss_options: AnchoredSampledLoopLossOptions
     optimizer_options: AdamWOptions
     scheduler_options: SchedulerOptions
@@ -48,8 +50,6 @@ def _get_data_provider(
 def _get_loss(
     template: LoopedCLUTRRStageTemplate,
 ) -> TypedModule[ModelForwardOutput, BackboneLossInput, Tensor]:
-    if template.loss_options.distillation_scale != 0:
-        raise ValueError("External NLI distillation is not defined for CLUTRR")
     return TypedModule(AnchoredSampledLoopCrossEntropyLoss(template.loss_options))
 
 
