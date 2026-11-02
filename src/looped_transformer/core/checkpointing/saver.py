@@ -38,7 +38,7 @@ class CheckpointSaver:
     def save_epoch(
         self, state: TrainingState, components: CheckpointComponents
     ) -> Path:
-        path = self.output_dir / state.stage_id / f"checkpoint-epoch-{state.epoch}.pt"
+        path = self.output_dir / "checkpoints" / f"checkpoint-epoch-{state.epoch}.pt"
         path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(self._construct_payload(state, components), path)
         return path

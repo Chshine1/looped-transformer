@@ -45,6 +45,7 @@ requests = ">=2.32,<3"
 rich = ">=13.9,<16"
 scikit-learn = ">=1.6,<2"
 tqdm = ">=4.67,<5"
+pydantic = ">=2.14.2,<3"
 
 [tool.pixi.dependencies]
 python = ">=3.12,<3.14"
@@ -65,7 +66,7 @@ python-version = "3.13"
 
 [tool.ruff]
 target-version = "py313"
-src = ["src"]
+src = ["src", "scripts"]
 line-length = 88
 
 [tool.ruff.lint]

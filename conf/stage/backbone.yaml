@@ -42,7 +42,8 @@ optimizer_options:
     '_loop\._transformer_block[12](?:\..*)?': 0.0004
     '_loop\._loop_normalization': 0.0002
     '_classify_normalization': 0.0002
-    '_classifier': 0.0005
+    '_classifier.main': 0.0005
+    '_classifier.branches.proofwriter': 0.0005
   weight_decay: 0.01
   beta1: 0.9
   beta2: 0.999

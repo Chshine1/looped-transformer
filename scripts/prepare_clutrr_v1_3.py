@@ -1,116 +1,151 @@
-"""Normalize corrected CLUTRR v1.3 output for the active experiment.
-
-Run the official v1.3 generator from the ``develop`` branch with AMT templates
-and ``template_amt.ignore_incorrect: true`` first. This script verifies that
-setting, reduces the generator output to the fields used by training, and emits
-an integrity manifest consumed by :class:`CLUTRRDataProvider`.
-"""
+from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 import yaml
+from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
 from looped_transformer.core.artifacts import get_file_fingerprint
 from looped_transformer.domains.clutrr.data_provider import CLUTRRDataProvider
-from looped_transformer.domains.clutrr.types import CLUTRR_RELATIONS, relation_index
+from looped_transformer.domains.clutrr.types import CLUTRR_RELATIONS
 
-ACTIVE_SPLIT_DEPTHS = {
+SplitName = Literal["train", "valid", "test"]
+
+SPLITS: tuple[SplitName, ...] = ("train", "valid", "test")
+ACTIVE_SPLIT_DEPTHS: dict[SplitName, tuple[int, ...]] = {
     "train": (2, 3),
     "valid": (2, 3),
     "test": (4, 5, 6),
 }
+# noinspection SpellCheckingInspection
+# The official v1.3 relation store misspells the female ``un`` target
+LABEL_NORMALIZATIONS: dict[str, str] = {"neice": "niece"}
+
+
+class RawV13Row(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    text_story: str
+    query: list[Any]
+    target_gender: str
+    resolution_path: list[Any]
+    edges: list[Any]
+    name_map: dict[Any, Any] | None = None
+    id: str | None = None
+
+    @model_validator(mode="after")
+    def _shape_is_valid(self) -> "RawV13Row":
+        if not self.text_story.strip():
+            raise ValueError("text_story must be non-empty")
+        if len(self.query) < 2:
+            raise ValueError("query must start with two entities")
+        if len(self.resolution_path) < 2:
+            raise ValueError("invalid resolution_path")
+        expected_path_edges = {
+            (self.resolution_path[i], self.resolution_path[i + 1])
+            for i in range(len(self.resolution_path) - 1)
+        }
+        observed_edges = {
+            (edge[0], edge[1])
+            for edge in self.edges
+            if isinstance(edge, (list, tuple)) and len(edge) == 3
+        }
+        if (
+            len(self.edges) != len(self.resolution_path) - 1
+            or observed_edges != expected_path_edges
+        ):
+            raise ValueError("active CLUTRR story contains non-path edges")
+        return self
+
+
+class NormalizedRow(BaseModel):
+    id: str
+    story: str
+    query: str
+    label: str
+    depth: int
+
+
+class AuditInfo(TypedDict):
+    iid_validation_from_training_pool: bool
+    length_disjoint_train_test: bool
+    depth_counts: dict[str, dict[str, int]]
+    unique_descriptor_counts: dict[str, int]
+    descriptor_set_sha256: dict[str, str]
 
 
 def _generator_excludes_incorrect_templates(config_path: Path) -> bool:
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if not isinstance(config, dict):
         return False
-    template_config = config.get("template_amt")
-    if isinstance(template_config, dict):
-        return template_config.get("ignore_incorrect") is True
-    stack = list(config.values())
-    while stack:
-        value = stack.pop()
-        if not isinstance(value, dict):
-            continue
-        nested = value.get("template_amt")
-        if isinstance(nested, dict) and nested.get("ignore_incorrect") is True:
+
+    def has_ignore_incorrect(node: dict[str, Any]) -> bool:
+        template_config = node.get("template_amt")
+        if (
+            isinstance(template_config, dict)
+            and template_config.get("ignore_incorrect") is True
+        ):
             return True
-        stack.extend(value.values())
-    return False
+        return any(
+            has_ignore_incorrect(child)
+            for child in node.values()
+            if isinstance(child, dict)
+        )
+
+    return has_ignore_incorrect(config)
 
 
-def _resolve_name(value: Any, name_map: Any) -> str:
-    if isinstance(name_map, dict):
+def _resolve_name(value: Any, name_map: Mapping[Any, Any] | None) -> str:
+    if name_map is not None:
         for key in (value, str(value)):
-            if key in name_map:
-                name = name_map[key]
-                if isinstance(name, str) and name:
-                    return name
+            name = name_map.get(key)
+            if isinstance(name, str) and name:
+                return name
     if isinstance(value, str) and value:
         return value.strip("[]")
     raise ValueError(f"Cannot resolve query entity {value!r}")
 
 
-def _normalize_example(raw: dict[str, Any], source: Path, line_number: int) -> dict:
+def _normalize_example(
+    raw_line: dict[str, Any], source: Path, line_number: int
+) -> NormalizedRow:
     try:
-        story = raw["text_story"]
-        raw_query = raw["query"]
-        label = raw["target_gender"].strip().lower()
-        resolution_path = raw["resolution_path"]
-        edges = raw["edges"]
-    except (KeyError, AttributeError) as error:
+        raw = RawV13Row.model_validate(raw_line)
+    except ValidationError as exc:
+        details = "; ".join(error["msg"] for error in exc.errors())
         raise ValueError(
-            f"{source}:{line_number}: missing v1.3 field {error}"
-        ) from error
+            f"{source}:{line_number}: invalid v1.3 row ({details})"
+        ) from exc
 
-    identifier = str(raw.get("id") or f"{source.stem}:{line_number}")
+    label = LABEL_NORMALIZATIONS.get(raw.target_gender.strip().lower())
+    label = label or raw.target_gender.strip().lower()
+    if label not in CLUTRR_RELATIONS:
+        raise ValueError(f"{source}:{line_number}: unknown label {label!r}")
 
-    if not isinstance(story, str) or not story.strip():
-        raise ValueError(f"{source}:{line_number}: text_story must be non-empty")
-    if not isinstance(raw_query, (list, tuple)) or len(raw_query) < 2:
-        raise ValueError(f"{source}:{line_number}: query must start with two entities")
-    if not isinstance(resolution_path, list) or len(resolution_path) < 2:
-        raise ValueError(f"{source}:{line_number}: invalid resolution_path")
-    expected_path_edges = {
-        (resolution_path[index], resolution_path[index + 1])
-        for index in range(len(resolution_path) - 1)
-    }
-    observed_edges = {
-        (edge[0], edge[1])
-        for edge in edges
-        if isinstance(edge, (list, tuple)) and len(edge) == 3
-    }
-    if len(edges) != len(resolution_path) - 1 or observed_edges != expected_path_edges:
-        raise ValueError(
-            f"{source}:{line_number}: active CLUTRR story contains non-path edges"
-        )
-    # The official v1.3 relation store misspells the female ``un`` target as
-    # ``neice`` even though its templates correctly say ``niece``. Normalize
-    # that generator-level typo before validating the project vocabulary.
-    label = {"neice": "niece"}.get(label, label)
-    relation_index(label)
+    try:
+        source_name = _resolve_name(raw.query[0], raw.name_map)
+        sink_name = _resolve_name(raw.query[1], raw.name_map)
+    except ValueError as exc:
+        raise ValueError(f"{source}:{line_number}: {exc}") from exc
 
-    source_name = _resolve_name(raw_query[0], raw.get("name_map"))
-    sink_name = _resolve_name(raw_query[1], raw.get("name_map"))
-    query = f"[{sink_name}] is the [MASK] of [{source_name}]."
-    return {
-        "id": identifier,
-        "story": story,
-        "query": query,
-        "label": label,
-        "depth": len(resolution_path) - 1,
-    }
+    return NormalizedRow(
+        id=raw.id or f"{source.stem}:{line_number}",
+        story=raw.text_story,
+        query=f"[{sink_name}] is the [MASK] of [{source_name}].",
+        label=label,
+        depth=len(raw.resolution_path) - 1,
+    )
 
 
 def _normalize_file(source: Path, destination: Path) -> int:
-    rows = 0
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".tmp")
+    rows = 0
     try:
         with (
             source.open("r", encoding="utf-8") as input_stream,
@@ -121,7 +156,9 @@ def _normalize_file(source: Path, destination: Path) -> int:
                     continue
                 raw = json.loads(line)
                 normalized = _normalize_example(raw, source, line_number)
-                output_stream.write(json.dumps(normalized, ensure_ascii=False))
+                output_stream.write(
+                    json.dumps(normalized.model_dump(), ensure_ascii=False)
+                )
                 output_stream.write("\n")
                 rows += 1
         if rows == 0:
@@ -133,10 +170,11 @@ def _normalize_file(source: Path, destination: Path) -> int:
     return rows
 
 
-def _audit_descriptors(input_dir: Path) -> dict[str, Any]:
-    descriptors: dict[str, set[str]] = {}
-    logical_ids: dict[str, set[str]] = {}
+def _audit_descriptors(input_dir: Path) -> AuditInfo:
+    descriptors: dict[SplitName, set[str]] = {}
+    logical_ids: dict[SplitName, set[str]] = {}
     depth_counts: dict[str, dict[str, int]] = {}
+
     for split, expected_depths in ACTIVE_SPLIT_DEPTHS.items():
         split_descriptors: set[str] = set()
         split_logical_ids: set[str] = set()
@@ -171,22 +209,21 @@ def _audit_descriptors(input_dir: Path) -> dict[str, Any]:
 
     if not logical_ids["valid"].issubset(logical_ids["train"]):
         raise ValueError("IID validation must be sampled from the training pool")
-    descriptor_overlap = descriptors["train"] & descriptors["test"]
-    if descriptor_overlap:
+    if descriptors["train"] & descriptors["test"]:
         raise ValueError("Train and test descriptors are not length-disjoint")
 
-    return {
-        "iid_validation_from_training_pool": True,
-        "length_disjoint_train_test": True,
-        "depth_counts": depth_counts,
-        "unique_descriptor_counts": {
+    return AuditInfo(
+        iid_validation_from_training_pool=True,
+        length_disjoint_train_test=True,
+        depth_counts=depth_counts,
+        unique_descriptor_counts={
             split: len(values) for split, values in descriptors.items()
         },
-        "descriptor_set_sha256": {
+        descriptor_set_sha256={
             split: hashlib.sha256("\n".join(sorted(values)).encode("utf-8")).hexdigest()
             for split, values in descriptors.items()
         },
-    }
+    )
 
 
 def main() -> None:
@@ -213,7 +250,6 @@ def main() -> None:
             "Run scripts/balance_clutrr_v1_3_graphs.py before rendering, then "
             "pass --balanced-graph-realizations"
         )
-
     if not _generator_excludes_incorrect_templates(args.generator_config):
         raise ValueError(
             "Generator config must set template_amt.ignore_incorrect: true"
@@ -222,7 +258,7 @@ def main() -> None:
     split_audit = _audit_descriptors(args.input_dir)
 
     files: dict[str, dict[str, Any]] = {}
-    for split in ("train", "valid", "test"):
+    for split in SPLITS:
         source = args.input_dir / f"{split}.jsonl"
         destination = args.output_dir / f"{split}.jsonl"
         rows = _normalize_file(source, destination)
@@ -243,7 +279,7 @@ def main() -> None:
             "incorrect_templates_excluded": True,
             "noise": "none",
             "config": get_file_fingerprint(args.generator_config),
-            "label_normalizations": {"neice": "niece"},
+            "label_normalizations": LABEL_NORMALIZATIONS,
             "logical_sampling": {
                 "strategy": "iid_short_balanced_with_replacement",
                 "dimensions": ["depth", "ungendered_target"],

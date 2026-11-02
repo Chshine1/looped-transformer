@@ -43,7 +43,6 @@ class Evaluator[TBatch, *TModelInput, TModelOutput, TLossInput]:
             checkpoint_loader.dispose()
 
     def open(self) -> None:
-        """Prepare the model and policy for one or more batch evaluations."""
         if self._training_modes is not None:
             raise RuntimeError("The evaluator is already open")
 
@@ -61,7 +60,6 @@ class Evaluator[TBatch, *TModelInput, TModelOutput, TLossInput]:
             raise
 
     def evaluate_batch(self, batch: TBatch) -> list[TModelOutput]:
-        """Evaluate one caller-supplied batch in the current evaluator session."""
         if self._training_modes is None:
             raise RuntimeError("The evaluator must be opened before evaluating a batch")
 
@@ -89,7 +87,6 @@ class Evaluator[TBatch, *TModelInput, TModelOutput, TLossInput]:
         return outputs
 
     def close(self) -> None:
-        """Close the current evaluator session and restore module training modes."""
         training_modes, self._training_modes = self._training_modes, None
         if training_modes is None:
             return

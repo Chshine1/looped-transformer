@@ -3,6 +3,11 @@ from argparse import Namespace
 from looped_transformer.app.command import Command, CommandContext
 from looped_transformer.app.commands.utils.modeling import create_model
 from looped_transformer.core.abstractions.typed_module import TypedBranchedModule
+from looped_transformer.core.checkpointing import CheckpointLoader
+from looped_transformer.core.evaluation.evaluator import (
+    EvaluationCheckpointOptions,
+    Evaluator,
+)
 from looped_transformer.core.training.model_trainer import ModelTrainer
 from looped_transformer.core.training.model_trainer_factory import ModelTrainerFactory
 from looped_transformer.core.training.training_stage_registry import (
@@ -12,6 +17,7 @@ from looped_transformer.domains.clutrr.collator import (
     CLUTRRCollator,
     CLUTRRCollatorOptions,
 )
+from looped_transformer.domains.clutrr.data_provider import CLUTRRDataProvider
 from looped_transformer.domains.clutrr.types import CLUTRR_RELATIONS, CLUTRRBatch
 from looped_transformer.domains.proofwriter.data_source import PROOFWRITER_TASK
 from looped_transformer.domains.proofwriter.types import PROOFWRITER_LABELS
@@ -22,6 +28,14 @@ from looped_transformer.domains.text_classification.pretrained_embedding_initial
 )
 from looped_transformer.domains.text_classification.tokenizer import PairTokenizer
 from looped_transformer.domains.text_classification.types import ModelForwardOutput
+from looped_transformer.domains.trajectory_readout import (
+    TrajectoryCollectionPolicy,
+    TrajectoryDataProvider,
+    TrajectoryReadout,
+    TrajectoryReadoutCollator,
+    TrajectoryReadoutStageTemplate,
+    create_trajectory_readout_stage,
+)
 
 
 class TrainCommand(Command):
@@ -37,16 +51,21 @@ class TrainCommand(Command):
 
         tokenizer = container[PairTokenizer]
         backbone = container.magic_partial(create_model)()
-        if options.training.resume_from is None:
-            self._initialize_embeddings(context, backbone, tokenizer)
-
-        trainer = self._create_trainer(context, backbone, tokenizer)
+        stage_type = options.training.stage.get("type")
+        if stage_type == "looped_clutrr":
+            if options.training.resume_from is None:
+                self._initialize_embeddings(context, backbone, tokenizer)
+            trainer = self._create_backbone_trainer(context, backbone, tokenizer)
+        else:
+            trainer = self._create_trajectory_readout_trainer(
+                context, backbone, tokenizer
+            )
         trainer.train()
 
     @staticmethod
     def _validate_stage_type(context: CommandContext) -> None:
         stage_type = context.options.training.stage.get("type")
-        if stage_type != "looped_clutrr":
+        if stage_type not in {"looped_clutrr", "trajectory_readout"}:
             raise ValueError(f"Unknown training stage type: {stage_type!r}")
 
     @staticmethod
@@ -75,8 +94,8 @@ class TrainCommand(Command):
             options.runtime.reproducibility.seed,
         )
 
-    def _create_trainer(
-        self,
+    @staticmethod
+    def _create_backbone_trainer(
         context: CommandContext,
         backbone: TypedBranchedModule,
         tokenizer: PairTokenizer,
@@ -102,4 +121,58 @@ class TrainCommand(Command):
             backbone,
             CLUTRRCollator(tokenizer, collator_options),
             registry.resolve(),
+        )
+
+    @staticmethod
+    def _create_trajectory_readout_trainer(
+        context: CommandContext,
+        backbone: TypedBranchedModule,
+        tokenizer: PairTokenizer,
+    ) -> ModelTrainer:
+        raw_stage = context.options.training.stage
+        template = TrajectoryReadoutStageTemplate.model_validate(
+            {key: value for key, value in raw_stage.items() if key != "type"}
+        )
+        if context.options.model.output_classes_count != len(CLUTRR_RELATIONS):
+            raise ValueError(f"CLUTRR requires {len(CLUTRR_RELATIONS)} output classes")
+
+        source = CLUTRRDataProvider(template.data_options)
+        backbone_collator = CLUTRRCollator(
+            tokenizer,
+            CLUTRRCollatorOptions(main_loss_scale=1.0, proofwriter=None),
+        )
+        collection_policy = TrajectoryCollectionPolicy(
+            context.options.model.loop.max_iterations
+        )
+        evaluator = Evaluator(
+            backbone,
+            backbone_collator,
+            collection_policy,
+            source,
+            CheckpointLoader(context.options.runtime.device),
+            context.options.runtime.device,
+            context.options.runtime.precision,
+            EvaluationCheckpointOptions(path=template.backbone_checkpoint),
+        )
+        trajectories = TrajectoryDataProvider(
+            source=source,
+            evaluator=evaluator,
+            collection_policy=collection_policy,
+            output_batch_size=template.output_batch_size,
+        )
+        readout = TypedBranchedModule(
+            TrajectoryReadout(
+                state_dimension=context.options.model.hidden_state_dimension,
+                classes_count=len(CLUTRR_RELATIONS),
+                options=template.model_options,
+            ).to(
+                device=context.options.runtime.device.device,
+                dtype=context.options.runtime.precision.dtype,
+            )
+        )
+        stage = create_trajectory_readout_stage(template, trajectories)
+        return context.container[ModelTrainerFactory].create(
+            readout,
+            TrajectoryReadoutCollator(),
+            stage,
         )

@@ -5,6 +5,7 @@ from torch import Tensor
 from looped_transformer.core.abstractions.training import IDataProvider
 from looped_transformer.core.evaluation import Evaluator
 from looped_transformer.domains.clutrr.types import CLUTRRBatch
+from looped_transformer.domains.text_classification.loss import BackboneLossInput
 from looped_transformer.domains.text_classification.types import ModelForwardOutput
 from looped_transformer.domains.trajectory_readout.batch import TrajectoryBatch
 from looped_transformer.domains.trajectory_readout.collection_policy import (
@@ -19,7 +20,12 @@ class TrajectoryDataProvider(IDataProvider[TrajectoryBatch]):
         self,
         source: IDataProvider[CLUTRRBatch],
         evaluator: Evaluator[
-            CLUTRRBatch, Tensor, Tensor, Tensor, ModelForwardOutput, Tensor
+            CLUTRRBatch,
+            Tensor,
+            Tensor,
+            Tensor,
+            ModelForwardOutput,
+            BackboneLossInput,
         ],
         collection_policy: TrajectoryCollectionPolicy,
         output_batch_size: int,

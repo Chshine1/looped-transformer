@@ -1,11 +1,61 @@
-from typing import Literal, cast
+from typing import Literal, cast, override
 
 import torch
+from pydantic import model_validator
 from torch import Tensor, nn
 
+from looped_transformer.core.config.base import (
+    ExclusiveProbability,
+    OptionsModel,
+    PositiveInt,
+)
+from looped_transformer.core.modules.branched_module import BranchedModule
 from looped_transformer.core.modules.nn.masked_mean_pooling import MaskedMeanPooling
 
 TrajectoryReadoutArchitecture = Literal["bidirectional", "causal"]
+
+
+class TrajectoryReadoutOptions(OptionsModel):
+    architecture: TrajectoryReadoutArchitecture
+    encoding_dimension: PositiveInt
+    dropout: ExclusiveProbability = 0.1
+
+    @model_validator(mode="after")
+    def require_even_bidirectional_encoding(self):
+        if self.architecture == "bidirectional" and self.encoding_dimension % 2:
+            raise ValueError(
+                "encoding_dimension must be even for a bidirectional readout"
+            )
+        return self
+
+
+class TrajectoryReadout(BranchedModule[Tensor, Tensor, Tensor]):
+    """Trainable application model around one trajectory-readout architecture."""
+
+    def __init__(
+        self,
+        state_dimension: int,
+        classes_count: int,
+        options: TrajectoryReadoutOptions,
+    ) -> None:
+        super().__init__()
+        readout_type = (
+            BidirectionalTrajectoryReadout
+            if options.architecture == "bidirectional"
+            else CausalTrajectoryReadout
+        )
+        self._readout = readout_type(
+            state_dimension=state_dimension,
+            encoding_dimension=options.encoding_dimension,
+            classes_count=classes_count,
+            dropout=options.dropout,
+        )
+
+    @override
+    def _forward_task(
+        self, timed_hidden_states: Tensor, padding_mask: Tensor
+    ) -> Tensor:
+        return self._readout(timed_hidden_states, padding_mask)
 
 
 class BidirectionalTrajectoryReadout(nn.Module):

@@ -50,6 +50,11 @@ def build_container(options: AppOptions) -> Container:
         "stage": options.training.stage,
         "resume_from": _checkpoint_reference(options.training.resume_from),
     }
+    backbone_checkpoint = options.training.stage.get("backbone_checkpoint")
+    if backbone_checkpoint is not None:
+        artifact_values["backbone_checkpoint"] = _checkpoint_reference(
+            backbone_checkpoint
+        )
     container[ArtifactSpec] = ArtifactSpec(
         format="looped-transformer-training",
         values=artifact_values,

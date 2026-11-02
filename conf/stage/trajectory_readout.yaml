@@ -1,0 +1,38 @@
+# @package training.stage
+
+id: clutrr_v1_3_bidirectional_readout
+type: trajectory_readout
+backbone_checkpoint: ???
+options:
+  epochs: 12
+  max_gradient_norm: 1.0
+  gradient_accumulation_steps: 1
+  save_every_epochs: 1
+data_options:
+  seed: 42
+  file_path: data/clutrr-v1.3/train.jsonl
+  manifest_path: data/clutrr-v1.3/manifest.json
+  batch_size: 96
+output_batch_size: 96
+model_options:
+  architecture: causal
+  encoding_dimension: 256
+  dropout: 0.10
+loss_options:
+  type: cross_entropy
+  label_smoothing: 0.05
+optimizer_options:
+  learning_rates:
+    '_readout\._input_normalization': 0.0002
+    '_readout\._gru': 0.0004
+    '_readout\._output_normalization': 0.0002
+    '_readout\._classifier': 0.0005
+  weight_decay: 0.01
+  beta1: 0.9
+  beta2: 0.999
+  epsilon: 0.00000001
+scheduler_options:
+  type: warmup_cosine
+  warmup_ratio: 0.06
+  warmup_start_factor: 0.1
+  minimum_learning_rate_factor: 0.1
