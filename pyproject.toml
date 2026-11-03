@@ -87,3 +87,6 @@ typecheck = "pyrefly check"
 format = "python -m ruff format ."
 test = "python -m unittest discover -s tests -v"
 train = "looped-transformer --config-dir conf train"
+
+[tool.pixi.feature.clutrr-data.tasks]
+prepare-clutrr = { cmd = "python scripts/generate_clutrr_data.py", default-environment = "clutrr-data" }
