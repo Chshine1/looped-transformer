@@ -18,7 +18,7 @@ def create_command_registry() -> CommandRegistry:
 def main() -> None:
     registry = create_command_registry()
     parser = argparse.ArgumentParser(description="Train the looped text classifier")
-    parser.add_argument("--config-dir", default="conf")
+    parser.add_argument("--config-dir", default="configs/main")
     parser.add_argument("--config-name", default="config")
     parser.add_argument("--override", action="append", default=[])
     registry.configure_parser(parser)

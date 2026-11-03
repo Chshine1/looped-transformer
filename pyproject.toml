@@ -22,10 +22,16 @@ platforms = [
 [tool.pixi.environments]
 default = { features = ["cu126"] }
 fallback = { features = ["cu124"] }
-clutrr-data = { features = ["clutrr-data"], no-default-feature = true }
 
 [tool.pixi.pypi-dependencies]
 looped_transformer = { path = ".", editable = true }
+
+[tool.pixi.environments.clutrr-data]
+features = ["clutrr-data"]
+no-default-feature = true
+
+[tool.pixi.feature.clutrr-data.pypi-dependencies]
+clutrr = { path = "./.data-sources/clutrr-v1.3", editable = true }
 
 [tool.pixi.feature.cu126.pypi-dependencies]
 torch = { version = "*", index = "https://download.pytorch.org/whl/cu126" }

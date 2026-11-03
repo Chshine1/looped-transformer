@@ -1,0 +1,14 @@
+{
+  "data_loc": "data/clutrr-v1.3",
+  "num_train": 10,
+  "num_valid": 10,
+  "num_test": 10,
+  "search_multiplier": 5,
+  "template_type": "amt",
+  "noise": true,
+  "noise_policy": "dangling",
+  "max_path_len": 5,
+  "train_descriptor_lengths": [2, 3, 4],
+  "val_descriptor_lengths": [3, 4],
+  "test_descriptor_lengths": [3, 4]
+}
