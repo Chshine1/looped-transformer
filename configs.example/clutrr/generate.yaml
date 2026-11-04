@@ -10,8 +10,8 @@ splits:
     count: 10
     depth_proportions: {3: 0.5, 4: 0.5}
 graph:
-  search_multiplier: 5
-  oversample_multiplier: 20
+  search_multiplier: 15
+  oversample_multiplier: 15
   noise: true
   noise_policy: dangling
   max_path_len: 5

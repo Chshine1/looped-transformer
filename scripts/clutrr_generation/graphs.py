@@ -58,6 +58,10 @@ def _read_records(path: Path) -> list[GraphRecord]:
         ]
 
 
+def count_graph_records(graph_dir: Path) -> dict[SplitName, int]:
+    return {split: len(_read_records(graph_dir / f"{split}.jsonl")) for split in SPLITS}
+
+
 def _make_unique(records: Iterable[GraphRecord]) -> list[GraphRecord]:
     unique: list[GraphRecord] = []
     seen: set[str] = set()
@@ -92,7 +96,8 @@ def merge_depth_graphs(
                 stream.write("\n")
 
 
-def postprocess_graphs(graph_dir: Path, targets: DepthTargets) -> None:
+def postprocess_graphs(graph_dir: Path, targets: DepthTargets) -> dict[SplitName, int]:
+    """Write every usable candidate, leaving quota selection until rendering."""
     pools: dict[SplitName, dict[int, list[GraphRecord]]] = {}
     for split in SPLITS:
         records = _read_records(graph_dir / f"{split}.jsonl")
@@ -120,9 +125,9 @@ def postprocess_graphs(graph_dir: Path, targets: DepthTargets) -> None:
             if depth in pools[split]:
                 pools[split][depth] = unique_to_split
 
-    selected: dict[SplitName, list[GraphRecord]] = {}
+    candidates: dict[SplitName, list[GraphRecord]] = {}
     for split in SPLITS:
-        selected[split] = []
+        candidates[split] = []
         for depth, expected in targets[split].items():
             available = pools[split][depth]
             if len(available) < expected:
@@ -131,12 +136,65 @@ def postprocess_graphs(graph_dir: Path, targets: DepthTargets) -> None:
                     f"expected {expected}, found {len(available)} after deduplication. "
                     "Increase oversample_multiplier."
                 )
-            selected[split].extend(available[:expected])
+            candidates[split].extend(available)
 
     for split in SPLITS:
         destination = graph_dir / f"{split}.jsonl"
         with destination.open("w", encoding="utf-8", newline="\n") as stream:
-            for record in selected[split]:
+            for record in candidates[split]:
                 stream.write(record.model_dump_json())
                 stream.write("\n")
-        print(f"post-processed {split}: {len(selected[split])} graphs")
+        print(f"post-processed {split}: {len(candidates[split])} candidates")
+    return {split: len(candidates[split]) for split in SPLITS}
+
+
+def select_rendered_graphs(graph_dir: Path, targets: DepthTargets) -> None:
+    """Apply exact per-depth quotas after the language layer has succeeded."""
+    selections: dict[SplitName, list[dict[str, object]]] = {}
+    for split in SPLITS:
+        source = graph_dir / f"{split}.jsonl"
+        with source.open(encoding="utf-8") as stream:
+            rendered = [json.loads(line) for line in stream if line.strip()]
+
+        rendered_by_depth: dict[int, list[dict[str, object]]] = {}
+        for depth in targets[split]:
+            available = [
+                row
+                for row in rendered
+                if isinstance(row.get("descriptor"), str)
+                and len(str(row["descriptor"]).split(",")) == depth
+            ]
+            rendered_by_depth[depth] = available
+        expected_total = sum(targets[split].values())
+        depth_diagnostics = ", ".join(
+            f"depth {depth}: expected {expected}, "
+            f"rendered {len(rendered_by_depth[depth])}"
+            for depth, expected in targets[split].items()
+        )
+        print(
+            f"language rendering {split}: expected {expected_total}, "
+            f"rendered {len(rendered)} ({depth_diagnostics})"
+        )
+
+        selected: list[dict[str, object]] = []
+        for depth, expected in targets[split].items():
+            available = rendered_by_depth[depth]
+            if len(available) < expected:
+                raise ValueError(
+                    f"Not enough renderable {split} graphs at depth {depth}: "
+                    f"expected {expected}, found {len(available)}. "
+                    "Increase oversample_multiplier."
+                )
+            selected.extend(available[:expected])
+        selections[split] = selected
+
+    for split in SPLITS:
+        source = graph_dir / f"{split}.jsonl"
+        with source.open("w", encoding="utf-8", newline="\n") as stream:
+            for row in selections[split]:
+                stream.write(json.dumps(row, ensure_ascii=False))
+                stream.write("\n")
+        print(
+            f"final {split}: expected {sum(targets[split].values())}, "
+            f"wrote {len(selections[split])} samples"
+        )

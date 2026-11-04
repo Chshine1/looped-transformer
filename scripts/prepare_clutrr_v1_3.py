@@ -220,7 +220,9 @@ def _audit_descriptors(input_dir: Path) -> AuditInfo:
             str(split): len(values) for split, values in descriptors.items()
         },
         descriptor_set_sha256={
-            str(split): hashlib.sha256("\n".join(sorted(values)).encode("utf-8")).hexdigest()
+            str(split): hashlib.sha256(
+                "\n".join(sorted(values)).encode("utf-8")
+            ).hexdigest()
             for split, values in descriptors.items()
         },
     )

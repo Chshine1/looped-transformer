@@ -13,7 +13,12 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
 from .config import SPLITS, GenerationConfig
-from .graphs import merge_depth_graphs, postprocess_graphs
+from .graphs import (
+    count_graph_records,
+    merge_depth_graphs,
+    postprocess_graphs,
+    select_rendered_graphs,
+)
 
 PROJECT_ROOT = Path(
     os.environ.get("PIXI_PROJECT_ROOT") or Path(__file__).resolve().parents[2]
@@ -162,12 +167,41 @@ def run(config: GenerationConfig, data_loc: Path) -> None:
                 max_path_len=config.graph.max_path_len,
             )
             generate_graphs(graph_config)
-            depth_directories[depth] = depth_root / "rule_0"
+            depth_directory = depth_root / "rule_0"
+            depth_directories[depth] = depth_directory
+            actual_counts = count_graph_records(depth_directory)
+            requested_counts = {
+                "train": int(graph_config.num_train_graphs),
+                "valid": int(graph_config.num_valid_graphs),
+                "test": int(graph_config.num_test_graphs),
+            }
+            logging.getLogger(__name__).info(
+                "GLC depth %d graphs: requested %d, stored %d "
+                "(train %d/%d, valid %d/%d, test %d/%d)",
+                depth,
+                sum(requested_counts.values()),
+                sum(actual_counts.values()),
+                actual_counts["train"],
+                requested_counts["train"],
+                actual_counts["valid"],
+                requested_counts["valid"],
+                actual_counts["test"],
+                requested_counts["test"],
+            )
 
         graph_dir = data_loc / "rule_0"
         merge_depth_graphs(depth_directories, graph_dir)
-        postprocess_graphs(graph_dir, depth_targets)
+        candidate_counts = postprocess_graphs(graph_dir, depth_targets)
+        # The official language layer renders before subsampling. Giving it the
+        # complete pool sizes prevents its split-wide random sampler from
+        # destroying the configured per-depth quotas.
+        language_config.update(
+            num_train=candidate_counts["train"],
+            num_valid=candidate_counts["valid"],
+            num_test=candidate_counts["test"],
+        )
         generate_language(language_config)
+        select_rendered_graphs(graph_dir, depth_targets)
     print(f"done. jsonl at {data_loc / 'rule_0'}")
 
 
