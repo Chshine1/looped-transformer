@@ -217,10 +217,10 @@ def _audit_descriptors(input_dir: Path) -> AuditInfo:
         length_disjoint_train_test=True,
         depth_counts=depth_counts,
         unique_descriptor_counts={
-            split: len(values) for split, values in descriptors.items()
+            str(split): len(values) for split, values in descriptors.items()
         },
         descriptor_set_sha256={
-            split: hashlib.sha256("\n".join(sorted(values)).encode("utf-8")).hexdigest()
+            str(split): hashlib.sha256("\n".join(sorted(values)).encode("utf-8")).hexdigest()
             for split, values in descriptors.items()
         },
     )

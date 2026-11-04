@@ -242,13 +242,24 @@ not a pure length comparison; a future label-matched control is required.
 
 ## Reproducibility
 
-The project uses `pixi` and Python 3.12 or newer.
+The project uses `pixi` and Python 3.12 or newer. The `default` and `fallback`
+environments contain only the application and training dependencies. The `dev`
+environment adds tests, linting, typechecking, type stubs, and the isolated
+CLUTRR generator packages needed to check `scripts/clutrr_generation`.
 
 ```powershell
 pixi run test
 pixi run typecheck
-pixi run python -m ruff check .
+pixi run lint
 pixi run format
+```
+
+CLUTRR generation writes progress to the console by default. Use `--log-file`
+to retain all logging, printed output, and progress information. Relative paths
+are created beneath the configured `data_loc`:
+
+```powershell
+pixi run prepare-clutrr --log-level INFO --log-file logs/generation.log
 ```
 
 Training artifacts record resolved model, stage, runtime, data fingerprints, and

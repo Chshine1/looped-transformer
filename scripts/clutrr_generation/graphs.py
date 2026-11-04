@@ -2,11 +2,22 @@ import json
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from .config import SPLITS, SplitName
 
 DEDUPLICATION_PRIORITY: tuple[SplitName, ...] = ("test", "valid", "train")
+INVALID_DESCRIPTOR_FRAGMENTS = (
+    "SO,SO",
+    "child,inv-child",
+    "inv-child,child",
+    "grand-inv,grand",
+    "inv-grand,grand",
+    "in-law,inv-in-law",
+    "inv-in-law,in-law",
+    "un,inv-un",
+    "inv-un,un",
+)
 type DepthTargets = Mapping[SplitName, Mapping[int, int]]
 
 
@@ -22,14 +33,13 @@ class GraphRecord(BaseModel):
     rules_used: list[str]
     rules_used_pos: list[int]
     resolution_path: list[int]
-    noise_edges: list[tuple[int, int, str]] = Field(default_factory=list)
+    noise_edges: list[tuple[int, int, str]]
 
     @property
     def depth(self) -> int:
         return len(self.descriptor.split(","))
 
     def logical_key(self) -> str:
-        """Return GLC's pre-noise graph identity in a stable serialized form."""
         supporting_edges = self.edges
         if self.noise_edges:
             noise_count = len(self.noise_edges)
@@ -48,7 +58,7 @@ def _read_records(path: Path) -> list[GraphRecord]:
         ]
 
 
-def _unique(records: Iterable[GraphRecord]) -> list[GraphRecord]:
+def _make_unique(records: Iterable[GraphRecord]) -> list[GraphRecord]:
     unique: list[GraphRecord] = []
     seen: set[str] = set()
     for record in records:
@@ -59,12 +69,39 @@ def _unique(records: Iterable[GraphRecord]) -> list[GraphRecord]:
     return unique
 
 
+def _is_language_compatible(record: GraphRecord) -> bool:
+    return not any(
+        fragment in record.descriptor for fragment in INVALID_DESCRIPTOR_FRAGMENTS
+    )
+
+
+def merge_depth_graphs(
+    depth_directories: Mapping[int, Path], destination: Path
+) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    for split in SPLITS:
+        records: list[GraphRecord] = []
+        for depth, directory in sorted(depth_directories.items()):
+            depth_records = _read_records(directory / f"{split}.jsonl")
+            records.extend(record for record in depth_records if record.depth == depth)
+        with (destination / f"{split}.jsonl").open(
+            "w", encoding="utf-8", newline="\n"
+        ) as stream:
+            for record in records:
+                stream.write(record.model_dump_json())
+                stream.write("\n")
+
+
 def postprocess_graphs(graph_dir: Path, targets: DepthTargets) -> None:
     pools: dict[SplitName, dict[int, list[GraphRecord]]] = {}
     for split in SPLITS:
         records = _read_records(graph_dir / f"{split}.jsonl")
         pools[split] = {
-            depth: _unique(record for record in records if record.depth == depth)
+            depth: _make_unique(
+                record
+                for record in records
+                if record.depth == depth and _is_language_compatible(record)
+            )
             for depth in targets[split]
         }
 
@@ -92,7 +129,7 @@ def postprocess_graphs(graph_dir: Path, targets: DepthTargets) -> None:
                 raise ValueError(
                     f"Not enough unique {split} graphs at depth {depth}: "
                     f"expected {expected}, found {len(available)} after deduplication. "
-                    "Increase search_multiplier."
+                    "Increase oversample_multiplier."
                 )
             selected[split].extend(available[:expected])
 

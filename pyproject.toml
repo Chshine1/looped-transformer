@@ -22,6 +22,7 @@ platforms = [
 [tool.pixi.environments]
 default = { features = ["cu126"] }
 fallback = { features = ["cu124"] }
+dev = { features = ["cu126", "dev", "clutrr-data"] }
 
 [tool.pixi.pypi-dependencies]
 looped_transformer = { path = ".", editable = true }
@@ -55,15 +56,18 @@ pydantic = ">=2.14.2,<3"
 
 [tool.pixi.dependencies]
 python = ">=3.12,<3.14"
-pixi-pycharm = ">=0.0.12,<0.0.13"
-ruff = ">=0.16.10,<0.17"
 transformers = ">=5.18.0,<6"
 tokenizers = ">=0.23.1,<0.24"
+
+[tool.pixi.feature.dev.dependencies]
+pixi-pycharm = ">=0.0.12,<0.0.13"
+ruff = ">=0.16.10,<0.17"
 pyrefly = ">=1.3.2,<2"
 types-pyyaml = ">=6.0.12.20260906,<7"
 
 [tool.pyrefly]
 project-includes = ["src", "tests", "scripts"]
+search-path = ["scripts", ".data-sources/clutrr-v1.3"]
 project-excludes = [
     "**/__pycache__",
     ".pixi",
@@ -83,10 +87,13 @@ ignore = ["E501"]
 quote-style = "double"
 
 [tool.pixi.tasks]
-typecheck = "pyrefly check"
-format = "python -m ruff format ."
-test = "python -m unittest discover -s tests -v"
 train = "looped-transformer --config-dir conf train"
 
+[tool.pixi.feature.dev.tasks]
+typecheck = { cmd = "pyrefly check", default-environment = "dev" }
+format = { cmd = "python -m ruff format .", default-environment = "dev" }
+lint = { cmd = "python -m ruff check .", default-environment = "dev" }
+test = { cmd = "python -m unittest discover -s tests -v", default-environment = "dev" }
+
 [tool.pixi.feature.clutrr-data.tasks]
-prepare-clutrr = { cmd = "python -m clutrr_generation", cwd = "scripts", default-environment = "clutrr-data" }
+prepare-clutrr = { cmd = "python -m clutrr_generation --log-level INFO --log-file generation.log", cwd = "scripts", default-environment = "clutrr-data" }
