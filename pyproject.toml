@@ -63,7 +63,7 @@ pyrefly = ">=1.3.2,<2"
 types-pyyaml = ">=6.0.12.20260906,<7"
 
 [tool.pyrefly]
-project-includes = ["src", "tests"]
+project-includes = ["src", "tests", "scripts"]
 project-excludes = [
     "**/__pycache__",
     ".pixi",
@@ -89,4 +89,4 @@ test = "python -m unittest discover -s tests -v"
 train = "looped-transformer --config-dir conf train"
 
 [tool.pixi.feature.clutrr-data.tasks]
-prepare-clutrr = { cmd = "python scripts/generate_clutrr_data.py", default-environment = "clutrr-data" }
+prepare-clutrr = { cmd = "python -m clutrr_generation", cwd = "scripts", default-environment = "clutrr-data" }

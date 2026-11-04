@@ -247,7 +247,7 @@ def main() -> None:
 
     if not args.balanced_graph_realizations:
         raise ValueError(
-            "Run scripts/balance_clutrr_v1_3_graphs.py before rendering, then "
+            "Run the CLUTRR generation package before preparation, then "
             "pass --balanced-graph-realizations"
         )
     if not _generator_excludes_incorrect_templates(args.generator_config):

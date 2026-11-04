@@ -104,20 +104,14 @@ pixi run -e clutrr-data --manifest-path /path/to/looped-transformer/pyproject.to
   noise_policy=dangling max_path_len=7 num_steps=0
 ```
 
-The GLC uniqueness search does not directly yield useful 60k/6k/6k splits: at
-this rule-base size it saturates early, and its descriptor-disjoint validation
-split can be tiny. The active preparation therefore filters invalid paths and
-samples the depth-2--3 GLC training pool with replacement, balanced by path depth
-and ungendered target. IID validation uses an independently rendered subsample
-of that same short-composition pool for checkpoint selection. Test uses only the
-GLC test pool at unseen depths 4--6. The balancing and preparation steps enforce
-length-disjoint train/test descriptors. They then use the official renderer to
-create independently seeded names and corrected AMT template realizations. Run
-the balancing step on freshly generated `rule_0` files:
+The generation pipeline oversamples GLC graphs, validates them as typed graph
+records, deduplicates within each split and across splits at the same depth, and
+then takes the exact per-depth counts configured in
+`configs/clutrr/generate.yaml`. It renders language only after graph
+post-processing succeeds. Run the complete pipeline with:
 
 ```bash
-pixi run python scripts/balance_clutrr_v1_3_graphs.py \
-  --graph-dir /path/to/generated/rule_0
+pixi run prepare-clutrr
 ```
 
 In `clutrr/config.yaml`, keep:
@@ -128,9 +122,14 @@ template_amt:
   ignore_incorrect: true
 ```
 
-Next run the official `clutrr/generator_glc.py` language layer for 60,000
-training, 6,000 validation, and 6,000 test examples. It overwrites the balanced
-logical files with rendered records. Normalize them:
+This is equivalent to running the package entrypoint directly:
+
+```bash
+pixi run -e clutrr-data python -m scripts.clutrr_generation
+```
+
+The official language layer overwrites the post-processed logical files with
+rendered records. Normalize them with:
 
 ```bash
 pixi run -e clutrr-data --manifest-path /path/to/looped-transformer/pyproject.toml \
